@@ -4,6 +4,7 @@ import { initDB } from './vault/db.js';
 import { getCount, listRecent } from './vault/store.js';
 import { handleInbound } from './whatsapp/handler.js';
 import { dispatch } from './router.js';
+import { autoDetectPhoneNumberId } from './whatsapp/client.js';
 
 const app = express();
 app.use(express.json());
@@ -110,6 +111,7 @@ app.get('/webhook', (req, res) => {
 // ── Inbound messages (from WhatsApp or external agent) ─────────────────────
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200); // Acknowledge immediately so WhatsApp doesn't retry
+  console.log('📨 Webhook event received from WhatsApp:', JSON.stringify(req.body));
   try {
     await handleInbound(req.body);
   } catch (err) {
@@ -157,6 +159,7 @@ app.get('/health', async (req, res) => {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 initDB();
+autoDetectPhoneNumberId();
 app.listen(config.port, () =>
   console.log(`🔒 Vault server running on port ${config.port}`)
 );
