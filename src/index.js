@@ -5,6 +5,7 @@ import { getCount, listRecent } from './vault/store.js';
 import { handleInbound } from './whatsapp/handler.js';
 import { dispatch } from './router.js';
 import { autoDetectPhoneNumberId } from './whatsapp/client.js';
+import { startAgentPoller } from './whatsapp/agentPoller.js';
 
 const app = express();
 app.use(express.json());
@@ -160,6 +161,7 @@ app.get('/health', async (req, res) => {
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 initDB();
 autoDetectPhoneNumberId();
+startAgentPoller();
 app.listen(config.port, () =>
   console.log(`🔒 Vault server running on port ${config.port}`)
 );
