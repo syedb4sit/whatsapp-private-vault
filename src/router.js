@@ -3,6 +3,8 @@ import { classify } from './vault/classifier.js';
 import { save, listRecent, deleteItem, getById } from './vault/store.js';
 import { semanticSearch, getEmbedding, keywordSearch } from './vault/search.js';
 import { encrypt, decrypt } from './vault/crypto.js';
+import { config } from './config.js';
+import { processWithGemini } from './agent/brain.js';
 
 const ICONS = { note: '📝', link: '🔗', secret: '🔐', file: '📎' };
 
@@ -15,6 +17,14 @@ const ICONS = { note: '📝', link: '🔗', secret: '🔐', file: '📎' };
 export async function dispatch(from, message) {
   const { type: msgType, text, mediaId, mimeType, caption } = message;
   const trimmed = (text || '').trim();
+
+  // ── Gemini AI Natural Language Processing ────────────────────────────────
+  if (config.geminiApiKey && trimmed && msgType === 'text') {
+    const aiResponse = await processWithGemini(trimmed);
+    if (aiResponse) {
+      return sendMessage(from, aiResponse);
+    }
+  }
 
   // ── list ──────────────────────────────────────────────────────────────────
   if (trimmed.toLowerCase() === 'list') {
