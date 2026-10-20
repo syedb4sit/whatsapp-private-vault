@@ -13,147 +13,34 @@ function getGenAI() {
   return genAI;
 }
 
-const toolDeclarations = [
-  {
-    name: 'save_note',
-    description: 'Save a note, thought, idea, link, or general information to the encrypted vault.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        content: { type: 'STRING', description: 'The text or note content to save' },
-        tags: {
-          type: 'ARRAY',
-          items: { type: 'STRING' },
-          description: 'Optional tags or categories (e.g. ["fyp", "meeting", "groceries"])',
-        },
-      },
-      required: ['content'],
-    },
-  },
-  {
-    name: 'save_secret',
-    description: 'Save confidential or sensitive information (passwords, PINs, tokens, credentials, secret notes). It is encrypted with AES-256.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        content: { type: 'STRING', description: 'The exact password, PIN, or secret value' },
-        label: { type: 'STRING', description: 'Short label or description of what this secret is for (e.g. "WiFi Password", "Bank PIN")' },
-      },
-      required: ['content'],
-    },
-  },
-  {
-    name: 'search_vault',
-    description: 'Search the vault for stored notes, memories, or keywords matching a query.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        query: { type: 'STRING', description: 'Search term or keyword to look up in the vault' },
-      },
-      required: ['query'],
-    },
-  },
-  {
-    name: 'list_vault',
-    description: 'List the most recent items stored in the vault.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        limit: { type: 'INTEGER', description: 'Number of recent items to list (default: 5)' },
-      },
-    },
-  },
-  {
-    name: 'get_item',
-    description: 'Retrieve an item by its numeric ID. If it is an encrypted secret, it will be decrypted.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        id: { type: 'INTEGER', description: 'The ID of the item to retrieve' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'delete_item',
-    description: 'Delete an item from the vault by its numeric ID.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        id: { type: 'INTEGER', description: 'The ID of the item to delete' },
-      },
-      required: ['id'],
-    },
-  },
-];
+const SYSTEM_PROMPT = `
+You are the intelligent brain of a secure personal memory vault assistant on WhatsApp.
+Your job is to read the user's message, determine their intent, and return a single valid JSON object.
+
+Available actions:
+1. "save_secret": When the user wants to save passwords, PINs, bank details, API keys, private tokens, or confidential data.
+   Required fields: "content" (the secret value), "label" (short title), "reply" (friendly confirmation)
+2. "save_note": When the user wants to remember or save regular notes, ideas, reminders, tasks, links, or facts.
+   Required fields: "content" (the text), "tags" (optional array of category strings), "reply" (friendly confirmation)
+3. "search_vault": When the user asks a question about what they saved, asks where something is, or wants to recall something.
+   Required fields: "query" (the keyword or topic to search)
+4. "list_vault": When the user asks to see recent notes, list everything, or check their memory.
+   Required fields: "reply"
+5. "get_item": When the user asks for a specific note/secret by its numeric ID (e.g. "show me 3", "get item 1", "reveal password 2").
+   Required fields: "id" (integer)
+6. "delete_item": When the user asks to delete or forget a specific item by ID (e.g. "delete 2", "remove note 1").
+   Required fields: "id" (integer)
+7. "chat": General greetings, small talk, or questions about what you can do.
+   Required fields: "reply"
+
+Rules:
+- NEVER leave passwords unencrypted; always classify them as "save_secret".
+- Keep replies concise, helpful, and natural for WhatsApp with emojis.
+`;
 
 /**
- * Execute a tool requested by Gemini.
- */
-function executeTool(name, args) {
-  if (name === 'save_note') {
-    const id = save({
-      type: 'note',
-      content: args.content,
-      tags: args.tags || [],
-    });
-    return { success: true, id, message: `Note saved with ID #${id}` };
-  }
-
-  if (name === 'save_secret') {
-    const encrypted = encrypt(args.content);
-    const tags = args.label ? [args.label.toLowerCase().replace(/\s+/g, '_')] : [];
-    const id = save({
-      type: 'secret',
-      content: encrypted,
-      tags,
-      isSecret: true,
-    });
-    return { success: true, id, message: `Secret encrypted with AES-256 and saved with ID #${id}` };
-  }
-
-  if (name === 'search_vault') {
-    const results = keywordSearch(args.query);
-    const formatted = results.map(r => ({
-      id: r.id,
-      type: r.type,
-      is_secret: r.is_secret,
-      content: r.is_secret ? '[Encrypted Secret - use get_item with ID to reveal]' : r.content,
-      tags: r.tags,
-      created_at: r.created_at,
-    }));
-    return { query: args.query, count: formatted.length, matches: formatted };
-  }
-
-  if (name === 'list_vault') {
-    const limit = args.limit || 5;
-    const items = listRecent(limit).map(r => ({
-      id: r.id,
-      type: r.type,
-      is_secret: r.is_secret,
-      content: r.is_secret ? '[Encrypted Secret]' : r.content,
-    }));
-    return { count: items.length, items };
-  }
-
-  if (name === 'get_item') {
-    const item = getById(args.id);
-    if (!item) return { error: `Item with ID #${args.id} not found.` };
-    const content = item.is_secret ? decrypt(item.content) : item.content;
-    return { id: item.id, type: item.type, is_secret: item.is_secret, content };
-  }
-
-  if (name === 'delete_item') {
-    deleteItem(args.id);
-    return { success: true, message: `Item #${args.id} deleted successfully.` };
-  }
-
-  return { error: `Unknown tool: ${name}` };
-}
-
-/**
- * Process a natural language message with Gemini Function Calling.
- * Returns natural text response or null if Gemini is not configured.
+ * Process a natural language message with Gemini.
+ * Returns a conversational WhatsApp reply string.
  */
 export async function processWithGemini(userText) {
   const client = getGenAI();
@@ -161,46 +48,89 @@ export async function processWithGemini(userText) {
 
   try {
     const model = client.getGenerativeModel({
-      model: 'gemini-2.0-flash',
-      systemInstruction:
-        'You are an intelligent, proactive personal memory vault assistant on WhatsApp.\n' +
-        'You can store notes, remember secrets, search memories, list items, and manage commitments.\n' +
-        'CRITICAL RULES:\n' +
-        '1. If the user tells you a password, PIN, key, or sensitive credential, ALWAYS use `save_secret` to store it with AES-256 encryption.\n' +
-        '2. If the user asks a question about what they saved or asks you to recall something, call `search_vault`.\n' +
-        '3. If they ask to see everything, call `list_vault`.\n' +
-        '4. If they ask to reveal or get a specific item or password, call `get_item`.\n' +
-        '5. If they want to delete or forget something, call `delete_item`.\n' +
-        '6. Keep your final WhatsApp response natural, concise, and helpful with appropriate emojis.',
-      tools: [{ functionDeclarations: toolDeclarations }],
+      model: 'gemini-3.8-flash',
+      systemInstruction: SYSTEM_PROMPT,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.2,
+      },
     });
 
-    const chat = model.startChat();
-    const result = await chat.sendMessage(userText);
-    const response = result.response;
+    const res = await model.generateContent(userText);
+    const text = res.response.text();
+    const parsed = JSON.parse(text);
 
-    const functionCalls = response.functionCalls();
-    if (functionCalls && functionCalls.length > 0) {
-      const call = functionCalls[0];
-      console.log(`🧠 [Gemini Agent] Decided to call tool: ${call.name} with:`, call.args);
-      const toolOutput = executeTool(call.name, call.args);
+    console.log(`🧠 [Gemini Intent] Action: ${parsed.action}`, parsed);
 
-      // Send tool result back to Gemini so it generates the natural language reply
-      const followUp = await chat.sendMessage([
-        {
-          functionResponse: {
-            name: call.name,
-            response: toolOutput,
-          },
-        },
-      ]);
-
-      return followUp.response.text();
+    // ── Execute Action ────────────────────────────────────────────────────────
+    if (parsed.action === 'save_secret' && parsed.content) {
+      const encrypted = encrypt(parsed.content);
+      const tags = parsed.label ? [parsed.label.toLowerCase().replace(/\s+/g, '_')] : ['secret'];
+      const id = save({
+        type: 'secret',
+        content: encrypted,
+        tags,
+        isSecret: true,
+      });
+      return `${parsed.reply || '🔐 Encrypted and saved to your private vault!'} (ID: #${id})`;
     }
 
-    return response.text();
+    if (parsed.action === 'save_note' && parsed.content) {
+      const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
+      const id = save({
+        type: 'note',
+        content: parsed.content,
+        tags,
+      });
+      const tagStr = tags.length ? `\nTags: ${tags.map(t => '#' + t).join(' ')}` : '';
+      return `${parsed.reply || '📝 Saved to your vault!'} (ID: #${id})${tagStr}`;
+    }
+
+    if (parsed.action === 'search_vault' && parsed.query) {
+      const results = keywordSearch(parsed.query);
+      if (!results || results.length === 0) {
+        return `🔍 I searched your vault for "${parsed.query}", but didn't find anything matching yet.`;
+      }
+      const lines = results.map(r => {
+        const preview = r.is_secret
+          ? '[🔐 Encrypted Secret — ask "reveal ' + r.id + '" to view]'
+          : r.content.slice(0, 80);
+        return `[#${r.id}] ${r.type.toUpperCase()}: ${preview}`;
+      });
+      return `🧠 Found ${results.length} item(s) for "${parsed.query}":\n\n${lines.join('\n\n')}`;
+    }
+
+    if (parsed.action === 'list_vault') {
+      const items = listRecent(5);
+      if (!items || items.length === 0) {
+        return '🔒 Your vault is currently empty.';
+      }
+      const lines = items.map(item => {
+        const preview = item.is_secret ? '[🔐 Secret]' : item.content.slice(0, 60);
+        return `[#${item.id}] ${item.type.toUpperCase()} — ${preview}`;
+      });
+      return `📦 Recent items in your vault:\n\n${lines.join('\n')}`;
+    }
+
+    if (parsed.action === 'get_item' && parsed.id) {
+      const item = getById(parsed.id);
+      if (!item) return `❌ No item found with ID #${parsed.id}.`;
+      const content = item.is_secret ? decrypt(item.content) : item.content;
+      return `🔑 Item #${item.id} (${item.type}):\n${content}`;
+    }
+
+    if (parsed.action === 'delete_item' && parsed.id) {
+      deleteItem(parsed.id);
+      return `🗑️ Permanently removed item #${parsed.id} from your vault.`;
+    }
+
+    if (parsed.reply) {
+      return parsed.reply;
+    }
+
+    return null;
   } catch (err) {
-    console.warn('⚠️ Gemini natural language processing error (falling back to direct commands):', err.message);
+    console.warn('⚠️ Gemini reasoning error (falling back to direct parser):', err.message);
     return null;
   }
 }
