@@ -1,0 +1,23 @@
+{
+  "name": "whatsapp-private-vault",
+  "version": "1.0.0",
+  "description": "A private vault accessible via WhatsApp",
+  "main": "src/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "openai": "^4.28.0",
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}

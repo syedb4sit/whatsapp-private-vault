@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: whatsapp-private-vault
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: PORT
+        value: 10000
+      - key: WEBHOOK_VERIFY_TOKEN
+        value: fb708706ee0bd33ff93426d7
+      - key: VAULT_ENCRYPTION_KEY
+        value: 55f601100915348404be44743c82a2fa
+      - key: OWNER_PHONE
+        value: "*"
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
