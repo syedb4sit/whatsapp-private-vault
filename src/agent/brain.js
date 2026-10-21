@@ -1,6 +1,15 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from '../config.js';
-import { save, listRecent, deleteItem, getById } from '../vault/store.js';
+import {
+  save,
+  listRecent,
+  deleteItem,
+  getById,
+  saveReminder,
+  listUpcomingReminders,
+  deleteReminder,
+  getReminderById,
+} from '../vault/store.js';
 import { keywordSearch } from '../vault/search.js';
 import { encrypt, decrypt } from '../vault/crypto.js';
 import { sendMediaMessage } from '../whatsapp/media.js';
@@ -14,33 +23,132 @@ function getGenAI() {
   return genAI;
 }
 
-const SYSTEM_PROMPT = `
+const CANDIDATE_MODELS = [
+  'gemini-flash-lite-latest',
+  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+];
+
+/**
+ * Build dynamic system prompt with real-time temporal grounding.
+ */
+function buildSystemPrompt() {
+  const now = new Date();
+  const utcIso = now.toISOString();
+  const pktString = now.toLocaleString('en-US', {
+    timeZone: 'Asia/Karachi',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+
+  return `
 You are the intelligent brain of a secure personal memory vault assistant on WhatsApp.
-Your job is to read the user's message, determine their intent, and return a single valid JSON object.
+Your job is to read the user's message, determine their exact intent, and return a single valid JSON object.
 
-Available actions:
-1. "save_secret": When the user wants to save passwords, PINs, bank details, API keys, private tokens, or confidential data.
-   Required fields: "content" (the secret value), "label" (short title), "reply" (friendly confirmation)
-2. "save_note": When the user wants to remember or save regular notes, ideas, reminders, tasks, links, or facts.
-   Required fields: "content" (the text), "tags" (optional array of category strings), "reply" (friendly confirmation)
-3. "search_vault": When the user asks a question about what they saved, asks where something is, or wants to recall notes.
-   Required fields: "query" (the keyword or topic to search)
-4. "list_vault": When the user asks to see recent notes, list everything, or check their memory.
-   Required fields: "reply"
-5. "get_item": When the user asks for a specific note/secret by its numeric ID (e.g. "show me 3", "get item 1", "reveal password 2").
-   Required fields: "id" (integer)
-6. "delete_item": When the user asks to delete or forget a specific item by ID (e.g. "delete 2", "remove note 1").
-   Required fields: "id" (integer)
-7. "send_media": When the user asks to see, send, return, download, or show an image, photo, picture, or document (e.g. "send me the photo", "show me my picture", "give me the image I sent", "download image 2", "send me the file").
-   Required fields: "id" (optional integer ID if mentioned), "query" (optional keyword like "photo"), "reply" (e.g. "Sending your photo now! 📸")
-8. "chat": General greetings, small talk, or questions about what you can do.
-   Required fields: "reply"
+REAL-WORLD CURRENT DATE & TIME REFERENCE:
+- UTC ISO Timestamp: ${utcIso}
+- Local Time in Pakistan (PKT, UTC+5): ${pktString}
+- Timezone: Asia/Karachi (Pakistan Standard Time, UTC+5)
 
-Rules:
-- NEVER leave passwords unencrypted; always classify them as "save_secret".
-- If the user asks for an image, photo, or file to be sent/downloaded, ALWAYS use "send_media".
-- Keep replies concise, helpful, and natural for WhatsApp with emojis.
+CRITICAL INSTRUCTIONS FOR DATE & TIME CALCULATIONS:
+- When a user asks for a reminder ("remind me in 10 minutes", "remind me at 5pm", "remind me tomorrow morning", "remind me tonight"), you MUST compute the exact future target time and output it in "due_at" as a standard UTC ISO-8601 string (e.g. "${utcIso}").
+- Remember: Local time is PKT (UTC+5). For example, 5:00 PM PKT is 12:00:00 UTC.
+- If the user specifies a clock time that has already passed today (e.g. it is 1:30 PM and user says "remind me at 10 AM"), schedule it for tomorrow at that time.
+- For relative durations like "in 5 minutes", "in 30 mins", "in 2 hours", add that exact duration to the reference UTC time.
+
+AVAILABLE ACTIONS:
+
+1. "schedule_reminder":
+   Trigger when: The user wants an alert, ping, or reminder at a future time or duration.
+   Examples: "remind me in 10 minutes to take medicine", "remind me at 5pm to call Ali", "set a reminder tomorrow 9am for meeting", "remind me Friday to pay rent", "ping me in 1 hour".
+   Required fields:
+   - "action": "schedule_reminder"
+   - "content": string (the reminder task/message)
+   - "due_at": string (calculated future UTC ISO-8601 timestamp)
+   - "reply": string (confirmation message mentioning the scheduled local time)
+
+2. "list_reminders":
+   Trigger when: The user asks to see their upcoming reminders or scheduled alerts.
+   Examples: "what reminders do I have?", "show my reminders", "list reminders", "any pending alarms?"
+   Required fields:
+   - "action": "list_reminders"
+
+3. "delete_reminder":
+   Trigger when: The user asks to cancel, delete, or dismiss a reminder.
+   Examples: "cancel reminder #2", "delete reminder 3", "remove reminder 1"
+   Required fields:
+   - "action": "delete_reminder"
+   - "id": integer
+
+4. "save_secret":
+   Trigger when: The user wants to store passwords, PINs, bank details, credentials, API keys, or confidential tokens.
+   Required fields:
+   - "action": "save_secret"
+   - "content": string (the secret value)
+   - "label": string (short identifier)
+   - "reply": string (friendly confirmation)
+
+5. "save_note":
+   Trigger when: The user wants to store general notes, facts, lists, links, or info WITHOUT any scheduled alert time.
+   Examples: "I parked on Level 3", "My shoe size is 9", "Note: book title is Deep Work", "save this link https://..."
+   Required fields:
+   - "action": "save_note"
+   - "content": string
+   - "tags": optional array of strings
+   - "reply": string
+
+6. "search_vault":
+   Trigger when: The user asks what they saved, queries their memory, or asks a question about their notes or secrets.
+   Examples: "what is my wifi password?", "where did I park?", "find my notes on project", "did I save anything about X?"
+   Required fields:
+   - "action": "search_vault"
+   - "query": string (search keywords)
+
+7. "list_vault":
+   Trigger when: The user asks to see recent notes, list everything, or view their saved items.
+   Examples: "list", "show recent", "what is in my vault?", "show all notes"
+   Required fields:
+   - "action": "list_vault"
+
+8. "get_item":
+   Trigger when: The user asks for a specific vault item by its numeric ID (e.g. "show 3", "get note 5", "reveal password 2").
+   Required fields:
+   - "action": "get_item"
+   - "id": integer
+
+9. "delete_item":
+   Trigger when: The user asks to delete or remove a vault item by ID (e.g. "delete note 3", "remove item 5").
+   Required fields:
+   - "action": "delete_item"
+   - "id": integer
+
+10. "send_media":
+    Trigger when: The user asks to see, send, or download a photo, picture, image, or document they sent earlier (e.g. "send me my photo", "show the image", "download receipt").
+    Required fields:
+    - "action": "send_media"
+    - "id": optional integer
+    - "query": optional keyword
+    - "reply": string
+
+11. "chat":
+    Trigger when: Greetings, questions about your capabilities, or general conversation.
+    Examples: "hello", "who are you?", "what can you do?", "thanks"
+    Required fields:
+    - "action": "chat"
+    - "reply": string
+
+CRITICAL DISAMBIGUATION RULES:
+- NEVER classify "remind me..." or future time requests as "save_note"! They are ALWAYS "schedule_reminder".
+- NEVER classify user queries ("what did I save", "where is...", "list notes") as "save_note"!
+- Keep responses friendly, natural, and formatted for WhatsApp with emojis.
 `;
+}
 
 /**
  * Process a natural language message with Gemini.
@@ -53,23 +161,116 @@ export async function processWithGemini(userText, from) {
   const client = getGenAI();
   if (!client) return null;
 
+  const systemInstruction = buildSystemPrompt();
+  let parsed = null;
+
+  for (const modelName of CANDIDATE_MODELS) {
+    try {
+      const model = client.getGenerativeModel(
+        {
+          model: modelName,
+          systemInstruction,
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.1,
+          },
+        },
+        { apiVersion: 'v1beta' }
+      );
+
+      const res = await model.generateContent(userText);
+      const text = res.response.text();
+      parsed = JSON.parse(text);
+      console.log(`🧠 [Gemini Intent] Model: ${modelName} | Action: ${parsed.action}`, parsed);
+      break;
+    } catch (err) {
+      console.warn(`⚠️ [Gemini] Model ${modelName} error (${err.message}), trying next fallback...`);
+    }
+  }
+
+  if (!parsed) {
+    console.warn('⚠️ All Gemini models unavailable, falling back to rule-based parser.');
+    return null;
+  }
+
   try {
-    const model = client.getGenerativeModel({
-      model: 'gemini-3.8-flash',
-      systemInstruction: SYSTEM_PROMPT,
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-      },
-    });
+    // ── 1. Schedule Reminder ──────────────────────────────────────────────────
+    if (parsed.action === 'schedule_reminder' && parsed.content) {
+      let dueAt = parsed.due_at;
+      if (!dueAt || isNaN(new Date(dueAt).getTime())) {
+        // Fallback to 1 hour if model didn't calculate a valid ISO string
+        dueAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      }
 
-    const res = await model.generateContent(userText);
-    const text = res.response.text();
-    const parsed = JSON.parse(text);
+      const targetUser = from || 'default_user';
+      const id = saveReminder({
+        userId: targetUser,
+        content: parsed.content,
+        dueAt,
+      });
 
-    console.log(`🧠 [Gemini Intent] Action: ${parsed.action}`, parsed);
+      let displayTime = '';
+      try {
+        displayTime = new Date(dueAt).toLocaleString('en-US', {
+          timeZone: 'Asia/Karachi',
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        }) + ' PKT';
+      } catch (e) {
+        displayTime = dueAt;
+      }
 
-    // ── Execute Action ────────────────────────────────────────────────────────
+      return (
+        `⏰ *Reminder Scheduled!* (ID: #${id})\n\n` +
+        `📌 *Task:* "${parsed.content}"\n` +
+        `🕒 *Due At:* ${displayTime}\n\n` +
+        `I will proactively send you a WhatsApp message when the time arrives! 🔔`
+      );
+    }
+
+    // ── 2. List Reminders ─────────────────────────────────────────────────────
+    if (parsed.action === 'list_reminders') {
+      const reminders = listUpcomingReminders(from);
+      if (!reminders || reminders.length === 0) {
+        return '⏰ You currently have no upcoming reminders scheduled.';
+      }
+      const lines = reminders.map(r => {
+        let timeStr = '';
+        try {
+          timeStr = new Date(r.due_at).toLocaleString('en-US', {
+            timeZone: 'Asia/Karachi',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          }) + ' PKT';
+        } catch (e) {
+          timeStr = r.due_at;
+        }
+        return `[#${r.id}] ⏰ ${timeStr}\n   📌 "${r.content}"`;
+      });
+      return (
+        `⏰ *Your Upcoming Scheduled Reminders (${reminders.length}):*\n\n` +
+        `${lines.join('\n\n')}\n\n` +
+        `_To cancel one, say: "cancel reminder <id>"_`
+      );
+    }
+
+    // ── 3. Delete / Cancel Reminder ───────────────────────────────────────────
+    if (parsed.action === 'delete_reminder' && parsed.id) {
+      const existing = getReminderById(parsed.id);
+      if (!existing) {
+        return `❌ No reminder found with ID #${parsed.id}.`;
+      }
+      deleteReminder(parsed.id);
+      return `🗑️ Successfully cancelled reminder #${parsed.id}: "${existing.content}".`;
+    }
+
+    // ── 4. Save Secret ────────────────────────────────────────────────────────
     if (parsed.action === 'save_secret' && parsed.content) {
       const encrypted = encrypt(parsed.content);
       const tags = parsed.label ? [parsed.label.toLowerCase().replace(/\s+/g, '_')] : ['secret'];
@@ -82,6 +283,7 @@ export async function processWithGemini(userText, from) {
       return `${parsed.reply || '🔐 Encrypted and saved to your private vault!'} (ID: #${id})`;
     }
 
+    // ── 5. Save Note ──────────────────────────────────────────────────────────
     if (parsed.action === 'save_note' && parsed.content) {
       const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
       const id = save({
@@ -93,13 +295,12 @@ export async function processWithGemini(userText, from) {
       return `${parsed.reply || '📝 Saved to your vault!'} (ID: #${id})${tagStr}`;
     }
 
-    // ── Send / Download Media ─────────────────────────────────────────────────
+    // ── 6. Send / Download Media ──────────────────────────────────────────────
     if (parsed.action === 'send_media') {
       let targetItem = null;
       if (parsed.id) {
         targetItem = getById(parsed.id);
       } else {
-        // Find the most recent image or file
         const recent = listRecent(20);
         targetItem = recent.find(
           i => i.type === 'image' || i.type === 'file' || i.type === 'document' || i.media_id
@@ -125,6 +326,7 @@ export async function processWithGemini(userText, from) {
       return `📸 Found image ID #${targetItem.id} ("${targetItem.content}") ready for download.`;
     }
 
+    // ── 7. Search Vault ───────────────────────────────────────────────────────
     if (parsed.action === 'search_vault' && parsed.query) {
       const results = keywordSearch(parsed.query);
       if (!results || results.length === 0) {
@@ -140,6 +342,7 @@ export async function processWithGemini(userText, from) {
       return `🧠 Found ${results.length} item(s) for "${parsed.query}":\n\n${lines.join('\n\n')}`;
     }
 
+    // ── 8. List Vault ─────────────────────────────────────────────────────────
     if (parsed.action === 'list_vault') {
       const items = listRecent(8);
       if (!items || items.length === 0) {
@@ -153,11 +356,11 @@ export async function processWithGemini(userText, from) {
       return `📦 Recent items in your vault:\n\n${lines.join('\n')}`;
     }
 
+    // ── 9. Get Item ───────────────────────────────────────────────────────────
     if (parsed.action === 'get_item' && parsed.id) {
       const item = getById(parsed.id);
       if (!item) return `❌ No item found with ID #${parsed.id}.`;
 
-      // If it's media, send the file directly!
       if (item.type === 'image' || item.type === 'document' || item.type === 'file' || item.media_id) {
         if (from) {
           await sendMediaMessage(from, {
@@ -176,18 +379,20 @@ export async function processWithGemini(userText, from) {
       return `🔑 Item #${item.id} (${item.type}):\n${content}`;
     }
 
+    // ── 10. Delete Item ───────────────────────────────────────────────────────
     if (parsed.action === 'delete_item' && parsed.id) {
       deleteItem(parsed.id);
       return `🗑️ Permanently removed item #${parsed.id} from your vault.`;
     }
 
+    // ── 11. Chat / Direct Reply ───────────────────────────────────────────────
     if (parsed.reply) {
       return parsed.reply;
     }
 
     return null;
   } catch (err) {
-    console.warn('⚠️ Gemini reasoning error (falling back to direct parser):', err.message);
+    console.warn('⚠️ Action execution error:', err.message);
     return null;
   }
 }

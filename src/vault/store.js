@@ -1,5 +1,7 @@
 import { getDB } from './db.js';
 
+// ── VAULT ITEMS ─────────────────────────────────────────────────────────────
+
 export function save({
   type,
   content,
@@ -61,4 +63,69 @@ export function getAllWithEmbeddings() {
 export function getCount() {
   const db = getDB();
   return db.prepare(`SELECT COUNT(*) as count FROM items`).get().count;
+}
+
+// ── REMINDERS ───────────────────────────────────────────────────────────────
+
+export function saveReminder({ userId, content, dueAt }) {
+  const db = getDB();
+  const stmt = db.prepare(
+    `INSERT INTO reminders (user_id, content, due_at) VALUES (?, ?, ?)`
+  );
+  const result = stmt.run(userId, content, dueAt);
+  return result.lastInsertRowid;
+}
+
+export function getDueReminders(nowIso = new Date().toISOString()) {
+  const db = getDB();
+  return db
+    .prepare(
+      `SELECT id, user_id, content, due_at, created_at
+       FROM reminders WHERE due_at <= ? AND sent_at IS NULL ORDER BY due_at ASC`
+    )
+    .all(nowIso);
+}
+
+export function markReminderSent(id, sentAt = new Date().toISOString()) {
+  const db = getDB();
+  return db
+    .prepare(`UPDATE reminders SET sent_at = ? WHERE id = ?`)
+    .run(sentAt, id);
+}
+
+export function listUpcomingReminders(userId) {
+  const db = getDB();
+  if (userId && userId !== '*') {
+    return db
+      .prepare(
+        `SELECT id, user_id, content, due_at, created_at
+         FROM reminders WHERE sent_at IS NULL AND user_id = ? ORDER BY due_at ASC`
+      )
+      .all(userId);
+  }
+  return db
+    .prepare(
+      `SELECT id, user_id, content, due_at, created_at
+       FROM reminders WHERE sent_at IS NULL ORDER BY due_at ASC`
+    )
+    .all();
+}
+
+export function deleteReminder(id) {
+  const db = getDB();
+  return db.prepare(`DELETE FROM reminders WHERE id = ?`).run(id);
+}
+
+export function getReminderById(id) {
+  const db = getDB();
+  return db.prepare(`SELECT * FROM reminders WHERE id = ?`).get(id);
+}
+
+export function getReminderCount() {
+  const db = getDB();
+  try {
+    return db.prepare(`SELECT COUNT(*) as count FROM reminders WHERE sent_at IS NULL`).get().count;
+  } catch (e) {
+    return 0;
+  }
 }

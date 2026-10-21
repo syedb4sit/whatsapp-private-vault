@@ -1,10 +1,11 @@
 import express from 'express';
 import { config } from './config.js';
 import { initDB } from './vault/db.js';
-import { getCount, listRecent } from './vault/store.js';
+import { getCount, listRecent, getReminderCount, listUpcomingReminders } from './vault/store.js';
 import { handleInbound } from './whatsapp/handler.js';
 import { dispatch } from './router.js';
 import { startAgentPoller } from './whatsapp/agentPoller.js';
+import { startReminderScheduler } from './agent/scheduler.js';
 
 const app = express();
 app.use(express.json());
@@ -13,10 +14,14 @@ app.use(express.urlencoded({ extended: true }));
 // ── Root Web Dashboard & Status ───────────────────────────────────────────
 app.get('/', (req, res) => {
   let count = 0;
+  let reminderCount = 0;
   let items = [];
+  let pendingReminders = [];
   try {
     count = getCount();
+    reminderCount = getReminderCount();
     items = listRecent(5);
+    pendingReminders = listUpcomingReminders();
   } catch (e) {}
 
   res.send(`
@@ -25,12 +30,13 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🔒 WhatsApp Private Vault MVP</title>
+  <title>🔒 WhatsApp Private Vault & Proactive Agent</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 800px; margin: 0 auto; line-height: 1.5; }
     .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid #334155; }
     h1 { color: #38bdf8; margin-top: 0; }
     .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.85rem; font-weight: 600; background: #059669; color: white; }
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     .stat { font-size: 2.2rem; font-weight: bold; color: #38bdf8; margin: 0.5rem 0; }
     input, button { padding: 0.75rem; border-radius: 8px; border: 1px solid #475569; font-size: 1rem; }
     input { background: #0f172a; color: white; width: 70%; }
@@ -42,24 +48,42 @@ app.get('/', (req, res) => {
   </style>
 </head>
 <body>
-  <h1>🔒 WhatsApp Private Vault MVP</h1>
+  <h1>🔒 WhatsApp Private Vault & Proactive Agent</h1>
   <div class="card">
-    <span class="badge">Online & Ready</span>
-    <div class="stat">${count}</div>
-    <div style="color: #94a3b8;">Total Items Stored in Encrypted Vault</div>
+    <span class="badge">Online & Proactive</span>
+    <div class="stats-grid">
+      <div>
+        <div class="stat">${count}</div>
+        <div style="color: #94a3b8;">Total Items Stored</div>
+      </div>
+      <div>
+        <div class="stat" style="color: #fbbf24;">${reminderCount}</div>
+        <div style="color: #94a3b8;">Active Scheduled Reminders</div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
     <h3>🧪 Test Interactive Simulator</h3>
-    <p style="color: #94a3b8; font-size: 0.9rem;">Test commands like: <code>secret: my pass 123</code>, <code>list</code>, <code>find pass</code>, <code>buy milk #todo</code></p>
+    <p style="color: #94a3b8; font-size: 0.9rem;">
+      Try reminders: <code>remind me in 10 minutes to take medicine</code>, <code>remind me at 5pm to call Ali</code>, <code>reminders</code><br>
+      Try notes/secrets: <code>secret: my pass 123</code>, <code>list</code>, <code>find pass</code>
+    </p>
     <form id="simForm">
       <input type="text" id="simText" placeholder="Type a message or command..." required />
       <button type="submit">Send</button>
     </form>
     <div id="simResult" style="margin-top: 1rem; display: none;">
-      <strong>Response:</strong>
+      <strong>Agent Response:</strong>
       <pre id="simOutput"></pre>
     </div>
+  </div>
+
+  <div class="card">
+    <h3>⏰ Upcoming Scheduled Reminders</h3>
+    <ul>
+      ${pendingReminders.length === 0 ? '<li style="color:#64748b;">No pending reminders.</li>' : pendingReminders.map(r => `<li>[#${r.id}] ⏰ ${new Date(r.due_at).toLocaleTimeString('en-US', { timeZone: 'Asia/Karachi', hour: 'numeric', minute: '2-digit', hour12: true })} PKT: "${r.content}"</li>`).join('')}
+    </ul>
   </div>
 
   <div class="card">
@@ -126,10 +150,7 @@ app.post('/api/test', async (req, res) => {
     return res.status(400).json({ error: 'Missing text in body' });
   }
 
-  let capturedReply = '';
-  // Temporary intercept console / reply for this test call
   try {
-    // Intercept client send to return reply in HTTP JSON response
     const originalConsoleLog = console.log;
     let replyLogs = [];
     console.log = (...args) => {
@@ -137,11 +158,15 @@ app.post('/api/test', async (req, res) => {
       originalConsoleLog.apply(console, args);
     };
 
-    await dispatch(from, { type: 'text', text });
+    const replyResult = await dispatch(from, { type: 'text', text });
     console.log = originalConsoleLog;
 
     const fullLog = replyLogs.join('\n');
-    res.json({ success: true, text, reply: fullLog || 'Processed successfully!' });
+    res.json({
+      success: true,
+      text,
+      reply: replyResult?.text?.body || replyResult?.body || fullLog || 'Processed successfully!',
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -151,15 +176,17 @@ app.post('/api/test', async (req, res) => {
 app.get('/health', async (req, res) => {
   try {
     const items = getCount();
-    res.json({ status: 'ok', items, nodeVersion: process.version });
+    const reminders = getReminderCount();
+    res.json({ status: 'ok', items, reminders, nodeVersion: process.version });
   } catch {
-    res.json({ status: 'ok', items: 0 });
+    res.json({ status: 'ok', items: 0, reminders: 0 });
   }
 });
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 initDB();
 startAgentPoller();
+startReminderScheduler();
 app.listen(config.port, () =>
   console.log(`🔒 Vault server running on port ${config.port}`)
 );

@@ -24,7 +24,9 @@ class JsonDatabaseFallback {
   constructor(filePath) {
     this.filePath = filePath;
     this.items = [];
+    this.reminders = [];
     this.nextId = 1;
+    this.nextReminderId = 1;
     this.load();
   }
 
@@ -32,18 +34,32 @@ class JsonDatabaseFallback {
     if (fs.existsSync(this.filePath)) {
       try {
         const raw = fs.readFileSync(this.filePath, 'utf8');
-        this.items = JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.items = parsed;
+          this.reminders = [];
+        } else {
+          this.items = parsed.items || [];
+          this.reminders = parsed.reminders || [];
+        }
         const maxId = this.items.reduce((max, i) => Math.max(max, i.id || 0), 0);
         this.nextId = maxId + 1;
+        const maxRemId = this.reminders.reduce((max, r) => Math.max(max, r.id || 0), 0);
+        this.nextReminderId = maxRemId + 1;
       } catch (e) {
         this.items = [];
+        this.reminders = [];
       }
     }
   }
 
   save() {
     try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.items, null, 2), 'utf8');
+      fs.writeFileSync(
+        this.filePath,
+        JSON.stringify({ items: this.items, reminders: this.reminders }, null, 2),
+        'utf8'
+      );
     } catch (e) {
       console.error('Failed to save vault.json:', e);
     }
@@ -57,6 +73,89 @@ class JsonDatabaseFallback {
     const s = sql.trim().toLowerCase();
     const self = this;
 
+    // ── REMINDERS TABLE QUERIES ─────────────────────────────────────────────
+    if (s.startsWith('insert into reminders')) {
+      return {
+        run: (user_id, content, due_at) => {
+          const reminder = {
+            id: self.nextReminderId++,
+            user_id: user_id || 'default_user',
+            content,
+            due_at,
+            created_at: new Date().toISOString(),
+            sent_at: null,
+          };
+          self.reminders.push(reminder);
+          self.save();
+          return { lastInsertRowid: reminder.id };
+        },
+      };
+    }
+
+    if (s.includes('from reminders') && s.includes('due_at <= ?') && s.includes('sent_at is null')) {
+      return {
+        all: (nowIso) => {
+          const cutoff = nowIso || new Date().toISOString();
+          return self.reminders
+            .filter(r => r.due_at <= cutoff && !r.sent_at)
+            .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+        },
+      };
+    }
+
+    if (s.startsWith('update reminders set sent_at = ? where id = ?')) {
+      return {
+        run: (sentAt, id) => {
+          const rem = self.reminders.find(r => Number(r.id) === Number(id));
+          if (rem) {
+            rem.sent_at = sentAt;
+            self.save();
+            return { changes: 1 };
+          }
+          return { changes: 0 };
+        },
+      };
+    }
+
+    if (s.includes('from reminders') && s.includes('sent_at is null')) {
+      return {
+        all: (userId) => {
+          let list = self.reminders.filter(r => !r.sent_at);
+          if (userId && userId !== '*') {
+            list = list.filter(r => r.user_id === userId);
+          }
+          return list.sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+        },
+      };
+    }
+
+    if (s.startsWith('delete from reminders where id = ?')) {
+      return {
+        run: (id) => {
+          const idx = self.reminders.findIndex(r => Number(r.id) === Number(id));
+          if (idx !== -1) {
+            self.reminders.splice(idx, 1);
+            self.save();
+            return { changes: 1 };
+          }
+          return { changes: 0 };
+        },
+      };
+    }
+
+    if (s.includes('from reminders where id = ?')) {
+      return {
+        get: (id) => self.reminders.find(r => Number(r.id) === Number(id)) || null,
+      };
+    }
+
+    if (s.includes('count(*) as count from reminders')) {
+      return {
+        get: () => ({ count: self.reminders.filter(r => !r.sent_at).length }),
+      };
+    }
+
+    // ── ITEMS TABLE QUERIES ─────────────────────────────────────────────────
     // 1. INSERT INTO items ...
     if (s.startsWith('insert into items')) {
       return {
@@ -127,7 +226,7 @@ class JsonDatabaseFallback {
     }
 
     // 5. SELECT COUNT(*) as count FROM items
-    if (s.includes('count(*) as count')) {
+    if (s.includes('count(*) as count from items') || s.includes('count(*) as count')) {
       return {
         get: () => ({ count: self.items.length }),
       };
@@ -206,13 +305,25 @@ export function initDB() {
         );
         CREATE INDEX IF NOT EXISTS idx_created ON items(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_type ON items(type);
+
+        CREATE TABLE IF NOT EXISTS reminders (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id     TEXT NOT NULL,
+          content     TEXT NOT NULL,
+          due_at      TEXT NOT NULL,
+          created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+          sent_at     TEXT DEFAULT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_at, sent_at);
       `);
+
       try {
         db.exec(`ALTER TABLE items ADD COLUMN file_path TEXT;`);
       } catch (alterErr) {
         // column already exists
       }
-      console.log(`📦 Vault DB initialized with SQLite at ${DB_PATH}`);
+
+      console.log(`📦 Vault DB initialized with SQLite at ${DB_PATH} (Items & Reminders active)`);
       return;
     } catch (err) {
       console.warn('SQLite init error, switching to JSON storage fallback:', err.message);
@@ -221,5 +332,5 @@ export function initDB() {
 
   // Graceful fallback if SQLite is not available or experimental flag is omitted
   db = new JsonDatabaseFallback(JSON_PATH);
-  console.log(`📦 Vault DB initialized with JSON storage at ${JSON_PATH}`);
+  console.log(`📦 Vault DB initialized with JSON storage at ${JSON_PATH} (Items & Reminders active)`);
 }

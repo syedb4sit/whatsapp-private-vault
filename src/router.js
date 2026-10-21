@@ -1,6 +1,15 @@
 import { sendMessage } from './whatsapp/client.js';
 import { classify } from './vault/classifier.js';
-import { save, listRecent, deleteItem, getById } from './vault/store.js';
+import {
+  save,
+  listRecent,
+  deleteItem,
+  getById,
+  saveReminder,
+  listUpcomingReminders,
+  deleteReminder,
+  getReminderById,
+} from './vault/store.js';
 import { semanticSearch, getEmbedding, keywordSearch } from './vault/search.js';
 import { encrypt, decrypt } from './vault/crypto.js';
 import { config } from './config.js';
@@ -12,14 +21,14 @@ const ICONS = { note: '📝', link: '🔗', secret: '🔐', file: '📎' };
 /**
  * Main dispatcher — routes an inbound WhatsApp message to the correct vault action.
  *
- * @param {string} from     Sender phone number
+ * @param {string} from     Sender phone number or user identifier
  * @param {{ type: string, text?: string, mediaId?: string, mimeType?: string, caption?: string }} message
  */
 export async function dispatch(from, message) {
   const { type: msgType, text, mediaId, mimeType, caption } = message;
   const trimmed = (text || '').trim();
 
-  // ── Gemini AI Natural Language Processing ────────────────────────────────
+  // ── 1. Gemini AI Natural Language Processing (Primary) ───────────────────
   if (config.geminiApiKey && trimmed && msgType === 'text') {
     const aiResponse = await processWithGemini(trimmed, from);
     if (aiResponse) {
@@ -27,7 +36,78 @@ export async function dispatch(from, message) {
     }
   }
 
-  // ── list ──────────────────────────────────────────────────────────────────
+  // ── 2. Fallback Manual Commands ──────────────────────────────────────────
+
+  // list reminders / reminders
+  if (trimmed.toLowerCase() === 'reminders' || trimmed.toLowerCase() === 'list reminders') {
+    const reminders = listUpcomingReminders(from);
+    if (!reminders || reminders.length === 0) {
+      return sendMessage(from, '⏰ You currently have no upcoming reminders scheduled.');
+    }
+    const lines = reminders.map(r => {
+      let timeStr = '';
+      try {
+        timeStr = new Date(r.due_at).toLocaleString('en-US', {
+          timeZone: 'Asia/Karachi',
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        }) + ' PKT';
+      } catch (e) {
+        timeStr = r.due_at;
+      }
+      return `[#${r.id}] ⏰ ${timeStr}\n   📌 "${r.content}"`;
+    });
+    return sendMessage(
+      from,
+      `⏰ *Your Upcoming Scheduled Reminders (${reminders.length}):*\n\n${lines.join('\n\n')}\n\n_To cancel one, say: "cancel reminder <id>"_`
+    );
+  }
+
+  // cancel reminder <id> / delete reminder <id>
+  const cancelRemMatch = trimmed.match(/^(?:cancel|delete)\s+reminder\s+#?(\d+)$/i);
+  if (cancelRemMatch) {
+    const id = parseInt(cancelRemMatch[1], 10);
+    const existing = getReminderById(id);
+    if (!existing) {
+      return sendMessage(from, `❌ No reminder found with ID #${id}`);
+    }
+    deleteReminder(id);
+    return sendMessage(from, `🗑️ Successfully cancelled reminder #${id}: "${existing.content}".`);
+  }
+
+  // remind me in <X> (min|mins|minutes|hours) to <task> (Fallback parser)
+  const remindMatch = trimmed.match(/^remind\s+me\s+in\s+(\d+)\s*(m|min|mins|minutes|h|hr|hours?)\s+(?:to\s+)?(.+)$/i);
+  if (remindMatch) {
+    const amount = parseInt(remindMatch[1], 10);
+    const unit = remindMatch[2].toLowerCase();
+    const task = remindMatch[3].trim();
+    const isHours = unit.startsWith('h');
+    const delayMs = isHours ? amount * 60 * 60 * 1000 : amount * 60 * 1000;
+    const dueAt = new Date(Date.now() + delayMs).toISOString();
+
+    const id = saveReminder({
+      userId: from || 'default_user',
+      content: task,
+      dueAt,
+    });
+
+    const displayTime = new Date(dueAt).toLocaleTimeString('en-US', {
+      timeZone: 'Asia/Karachi',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }) + ' PKT';
+
+    return sendMessage(
+      from,
+      `⏰ *Reminder Scheduled!* (ID: #${id})\n\n📌 *Task:* "${task}"\n🕒 *Due At:* ${displayTime}\n\nI will proactively send you a WhatsApp message when the time arrives! 🔔`
+    );
+  }
+
+  // list (vault items)
   if (trimmed.toLowerCase() === 'list') {
     const items = listRecent(10);
     if (!items.length) return sendMessage(from, '🔒 Your vault is empty.');
@@ -38,7 +118,7 @@ export async function dispatch(from, message) {
     return sendMessage(from, `📦 Last ${items.length} items:\n\n${lines.join('\n')}`);
   }
 
-  // ── delete <id> ───────────────────────────────────────────────────────────
+  // delete <id>
   const deleteMatch = trimmed.match(/^delete\s+(\d+)$/i);
   if (deleteMatch) {
     const id = parseInt(deleteMatch[1], 10);
@@ -48,7 +128,7 @@ export async function dispatch(from, message) {
     return sendMessage(from, `🗑️ Deleted item #${id}`);
   }
 
-  // ── get <id> (reveal secret or send media file) ───────────────────────────
+  // get <id> (reveal secret or send media file)
   const getMatch =
     trimmed.match(/^get\s+(\d+)$/i) ||
     trimmed.match(/^(?:show|send)\s+(?:me\s+)?(?:photo|image|item)?\s*#?(\d+)$/i);
@@ -74,7 +154,7 @@ export async function dispatch(from, message) {
     return sendMessage(from, `🔑 #${id} (${item.type}):\n${content}`);
   }
 
-  // ── media / file attachment ───────────────────────────────────────────────
+  // media / file attachment
   if (msgType !== 'text' && mediaId) {
     const isImage = msgType === 'image';
     const defaultCaption = isImage ? 'Uploaded photo' : `File (${mimeType})`;
@@ -94,14 +174,13 @@ export async function dispatch(from, message) {
     );
   }
 
-  // ── text processing ───────────────────────────────────────────────────────
+  // text processing (classifier fallback)
   const { type, content, tags, isSearch } = await classify(trimmed);
 
   // Search intent
   if (isSearch) {
     await sendMessage(from, '🔍 Searching your vault...');
 
-    // Extract core query by removing natural language trigger prefixes
     let cleanQuery = trimmed;
     const prefixes = [
       'find ',
@@ -126,7 +205,6 @@ export async function dispatch(from, message) {
     try {
       semanticResults = await semanticSearch(cleanQuery);
     } catch (err) {
-      // If OpenAI embedding is not available, gracefully use keyword search
       console.warn('Semantic search unavailable, using keyword fallback:', err.message);
     }
 
@@ -140,7 +218,6 @@ export async function dispatch(from, message) {
       return sendMessage(from, `🧠 Found ${semanticResults.length} result(s):\n\n${lines.join('\n\n')}`);
     }
 
-    // Fallback to keyword search
     const kwResults = keywordSearch(cleanQuery);
     if (kwResults.length > 0) {
       const lines = kwResults.map(r => {
@@ -153,7 +230,7 @@ export async function dispatch(from, message) {
     return sendMessage(from, `🤷 Nothing found for: "${cleanQuery}"`);
   }
 
-  // ── store item ────────────────────────────────────────────────────────────
+  // store item
   let storedContent = content;
   let isSecret = false;
 
@@ -162,7 +239,6 @@ export async function dispatch(from, message) {
     isSecret = true;
   }
 
-  // Embed non-secret items for semantic search
   let embedding = null;
   if (!isSecret) {
     try {
