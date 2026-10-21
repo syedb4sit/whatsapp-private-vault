@@ -5,7 +5,7 @@ let schedulerInterval = null;
 let isChecking = false;
 
 /**
- * Check for due reminders and dispatch WhatsApp alerts proactively in classic butler style.
+ * Check for due reminders and dispatch clean, understated WhatsApp alerts.
  */
 export async function checkAndDispatchReminders() {
   if (isChecking) return;
@@ -36,18 +36,16 @@ export async function checkAndDispatchReminders() {
         }
 
         const alertMessage =
-          `🛎️ *Pardon the intrusion, sir.*\n\n` +
-          `A scheduled matter upon your itinerary requires your attention:\n` +
-          `📌 *${item.content}*\n\n` +
-          `🕰️ _Punctually delivered at ${scheduledTimeStr}_ 🎩\n` +
-          `_Ref: Reminder #${item.id}_`;
+          `*Reminder:*\n\n` +
+          `• ${item.content}\n\n` +
+          `_${scheduledTimeStr}_`;
 
-        console.log(`🔔 [Reminder Engine] Sending butler alert #${item.id} to ${item.user_id}: "${item.content}"`);
+        console.log(`🔔 [Reminder Engine] Sending alert to ${item.user_id}: "${item.content}"`);
 
         try {
           await sendMessage(item.user_id, alertMessage);
         } catch (sendErr) {
-          console.error(`❌ Failed to send reminder alert #${item.id}:`, sendErr.message);
+          console.error(`❌ Failed to send reminder alert:`, sendErr.message);
         }
       }
     }
