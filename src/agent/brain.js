@@ -8,6 +8,7 @@ import {
   saveReminder,
   listUpcomingReminders,
   deleteReminder,
+  deleteAllReminders,
   getReminderById,
 } from '../vault/store.js';
 import { keywordSearch } from '../vault/search.js';
@@ -30,9 +31,11 @@ const CANDIDATE_MODELS = [
 ];
 
 /**
- * Build dynamic system prompt with real-time temporal grounding.
+ * Build dynamic system prompt with real-time temporal grounding and active user reminders context.
+ *
+ * @param {string} [from]
  */
-function buildSystemPrompt() {
+function buildSystemPrompt(from) {
   const now = new Date();
   const utcIso = now.toISOString();
   const pktString = now.toLocaleString('en-US', {
@@ -47,6 +50,35 @@ function buildSystemPrompt() {
     hour12: true,
   });
 
+  let pendingList = [];
+  try {
+    pendingList = listUpcomingReminders(from);
+  } catch (e) {}
+
+  const remindersContext =
+    pendingList.length > 0
+      ? pendingList
+          .map(r => {
+            let timeStr = '';
+            try {
+              timeStr =
+                new Date(r.due_at).toLocaleString('en-US', {
+                  timeZone: 'Asia/Karachi',
+                  weekday: 'short',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true,
+                }) + ' PKT';
+            } catch (err) {
+              timeStr = r.due_at;
+            }
+            return `  - ID #${r.id}: "${r.content}" (Due: ${timeStr}, ISO: ${r.due_at})`;
+          })
+          .join('\n')
+      : '  None currently scheduled.';
+
   return `
 You are the intelligent brain of a secure personal memory vault assistant on WhatsApp.
 Your job is to read the user's message, determine their exact intent, and return a single valid JSON object.
@@ -55,6 +87,9 @@ REAL-WORLD CURRENT DATE & TIME REFERENCE:
 - UTC ISO Timestamp: ${utcIso}
 - Local Time in Pakistan (PKT, UTC+5): ${pktString}
 - Timezone: Asia/Karachi (Pakistan Standard Time, UTC+5)
+
+USER'S CURRENT ACTIVE / UPCOMING REMINDERS:
+${remindersContext}
 
 CRITICAL INSTRUCTIONS FOR DATE & TIME CALCULATIONS:
 - When a user asks for a reminder ("remind me in 10 minutes", "remind me at 5pm", "remind me tomorrow morning", "remind me tonight"), you MUST compute the exact future target time and output it in "due_at" as a standard UTC ISO-8601 string (e.g. "${utcIso}").
@@ -80,11 +115,18 @@ AVAILABLE ACTIONS:
    - "action": "list_reminders"
 
 3. "delete_reminder":
-   Trigger when: The user asks to cancel, delete, or dismiss a reminder.
-   Examples: "cancel reminder #2", "delete reminder 3", "remove reminder 1"
+   Trigger when: The user asks to cancel, delete, or dismiss a reminder — either by numeric ID (e.g. "cancel reminder 2"), by topic/description (e.g. "cancel meeting reminder", "cancel birthday reminder", "remove doctor reminder"), by time/day (e.g. "cancel tomorrow's meeting reminder", "delete the 5pm reminder"), or all at once ("cancel all reminders").
    Required fields:
    - "action": "delete_reminder"
-   - "id": integer
+   - "id": optional integer (the exact ID from the USER'S CURRENT ACTIVE REMINDERS list above)
+   - "query": optional string (search keywords like "meeting", "birthday", "doctor")
+   - "all": optional boolean (true if user asked to cancel all reminders)
+   - "reply": optional string
+   HOW TO RESOLVE:
+   - Check the USER'S CURRENT ACTIVE REMINDERS list above.
+   - If user says "cancel meeting reminder for tomorrow", find the one matching "meeting" on tomorrow's date, and set "id" to its numeric ID!
+   - If user says "cancel birthday reminder", find the one about birthday, and set "id" to its numeric ID!
+   - If there is no matching reminder in active reminders, you can still return "delete_reminder" with "query", or a polite reply explaining none was found.
 
 4. "save_secret":
    Trigger when: The user wants to store passwords, PINs, bank details, credentials, API keys, or confidential tokens.
@@ -129,7 +171,7 @@ AVAILABLE ACTIONS:
    - "id": integer
 
 10. "send_media":
-    Trigger when: The user asks to see, send, or download a photo, picture, image, or document they sent earlier (e.g. "send me my photo", "show the image", "download receipt").
+    Trigger when: The user asks to see, send, or download a photo, picture, image, or document they sent earlier.
     Required fields:
     - "action": "send_media"
     - "id": optional integer
@@ -145,7 +187,7 @@ AVAILABLE ACTIONS:
 
 CRITICAL DISAMBIGUATION RULES:
 - NEVER classify "remind me..." or future time requests as "save_note"! They are ALWAYS "schedule_reminder".
-- NEVER classify user queries ("what did I save", "where is...", "list notes") as "save_note"!
+- NEVER classify cancel/delete requests as "save_note"!
 - Keep responses friendly, natural, and formatted for WhatsApp with emojis.
 `;
 }
@@ -161,7 +203,7 @@ export async function processWithGemini(userText, from) {
   const client = getGenAI();
   if (!client) return null;
 
-  const systemInstruction = buildSystemPrompt();
+  const systemInstruction = buildSystemPrompt(from);
   let parsed = null;
 
   for (const modelName of CANDIDATE_MODELS) {
@@ -198,7 +240,6 @@ export async function processWithGemini(userText, from) {
     if (parsed.action === 'schedule_reminder' && parsed.content) {
       let dueAt = parsed.due_at;
       if (!dueAt || isNaN(new Date(dueAt).getTime())) {
-        // Fallback to 1 hour if model didn't calculate a valid ISO string
         dueAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
       }
 
@@ -211,14 +252,15 @@ export async function processWithGemini(userText, from) {
 
       let displayTime = '';
       try {
-        displayTime = new Date(dueAt).toLocaleString('en-US', {
-          timeZone: 'Asia/Karachi',
-          month: 'short',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-        }) + ' PKT';
+        displayTime =
+          new Date(dueAt).toLocaleString('en-US', {
+            timeZone: 'Asia/Karachi',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          }) + ' PKT';
       } catch (e) {
         displayTime = dueAt;
       }
@@ -240,14 +282,16 @@ export async function processWithGemini(userText, from) {
       const lines = reminders.map(r => {
         let timeStr = '';
         try {
-          timeStr = new Date(r.due_at).toLocaleString('en-US', {
-            timeZone: 'Asia/Karachi',
-            month: 'short',
-            day: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true,
-          }) + ' PKT';
+          timeStr =
+            new Date(r.due_at).toLocaleString('en-US', {
+              timeZone: 'Asia/Karachi',
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+            }) + ' PKT';
         } catch (e) {
           timeStr = r.due_at;
         }
@@ -256,18 +300,82 @@ export async function processWithGemini(userText, from) {
       return (
         `⏰ *Your Upcoming Scheduled Reminders (${reminders.length}):*\n\n` +
         `${lines.join('\n\n')}\n\n` +
-        `_To cancel one, say: "cancel reminder <id>"_`
+        `_To cancel one, say: "cancel meeting reminder", "cancel reminder 1", etc._`
       );
     }
 
-    // ── 3. Delete / Cancel Reminder ───────────────────────────────────────────
-    if (parsed.action === 'delete_reminder' && parsed.id) {
-      const existing = getReminderById(parsed.id);
-      if (!existing) {
-        return `❌ No reminder found with ID #${parsed.id}.`;
+    // ── 3. Delete / Cancel Reminder (Semantic, Query, Date, or ID) ────────────
+    if (parsed.action === 'delete_reminder') {
+      // 1. Cancel all
+      if (parsed.all) {
+        const count = deleteAllReminders(from);
+        if (count === 0) {
+          return '⏰ You had no pending reminders to cancel.';
+        }
+        return `🗑️ Successfully cancelled all ${count} upcoming reminder(s).`;
       }
-      deleteReminder(parsed.id);
-      return `🗑️ Successfully cancelled reminder #${parsed.id}: "${existing.content}".`;
+
+      // 2. Try ID directly if Gemini matched one
+      let targetReminder = null;
+      if (parsed.id) {
+        targetReminder = getReminderById(parsed.id);
+      }
+
+      // 3. If ID not matched or not found, search pending reminders intelligently
+      if (!targetReminder) {
+        const pending = listUpcomingReminders(from);
+        const userQuery = (parsed.query || userText || '').toLowerCase();
+
+        // Strip command noise: "cancel", "delete", "reminder", "the", "for"
+        const cleanQuery = userQuery
+          .replace(/^(?:cancel|delete|remove|dismiss)\s+/i, '')
+          .replace(/\s+reminder(?:s)?/i, '')
+          .replace(/^(?:the|my)\s+/i, '')
+          .replace(/\s+for\s+(?:tomorrow|today|tonight)/i, '')
+          .trim();
+
+        // A. Direct substring match on content
+        if (cleanQuery && pending.length > 0) {
+          targetReminder = pending.find(r => r.content.toLowerCase().includes(cleanQuery));
+
+          // B. Token-based match (e.g. "meeting", "birthday")
+          if (!targetReminder) {
+            const tokens = cleanQuery.split(/\s+/).filter(t => t.length >= 3);
+            targetReminder = pending.find(r => {
+              const lower = r.content.toLowerCase();
+              return tokens.some(t => lower.includes(t));
+            });
+          }
+        }
+
+        // C. Date-based matching (e.g. "cancel reminder for tomorrow")
+        if (!targetReminder && userQuery.includes('tomorrow')) {
+          const tmr = new Date();
+          tmr.setDate(tmr.getDate() + 1);
+          const tmrStr = tmr.toISOString().slice(0, 10);
+          const tomorrowMatches = pending.filter(r => r.due_at.startsWith(tmrStr));
+          if (tomorrowMatches.length === 1) {
+            targetReminder = tomorrowMatches[0];
+          } else if (tomorrowMatches.length > 1 && cleanQuery) {
+            targetReminder = tomorrowMatches.find(r => r.content.toLowerCase().includes(cleanQuery));
+          }
+        }
+      }
+
+      if (!targetReminder) {
+        const pending = listUpcomingReminders(from);
+        if (!pending || pending.length === 0) {
+          return '⏰ You currently have no pending reminders scheduled.';
+        }
+        const available = pending.map(r => `• [#${r.id}] "${r.content}"`).join('\n');
+        return `🔍 I couldn't find a matching reminder to cancel.\n\nYour active reminders are:\n${available}`;
+      }
+
+      deleteReminder(targetReminder.id);
+      return (
+        parsed.reply ||
+        `🗑️ Successfully cancelled reminder #${targetReminder.id}: "${targetReminder.content}".`
+      );
     }
 
     // ── 4. Save Secret ────────────────────────────────────────────────────────

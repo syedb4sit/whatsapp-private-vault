@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node --experimental-sqlite src/index.js",
     "dev": "nodemon --exec \"node --experimental-sqlite\" src/index.js",
-    "test": "node --experimental-sqlite tests/test_suite.js"
+    "test": "node --experimental-sqlite tests/test_suite.js && node --experimental-sqlite tests/test_natural_cancel.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

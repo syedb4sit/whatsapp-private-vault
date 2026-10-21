@@ -116,6 +116,16 @@ export function deleteReminder(id) {
   return db.prepare(`DELETE FROM reminders WHERE id = ?`).run(id);
 }
 
+export function deleteAllReminders(userId) {
+  const db = getDB();
+  if (userId && userId !== '*') {
+    const res = db.prepare(`DELETE FROM reminders WHERE sent_at IS NULL AND user_id = ?`).run(userId);
+    return res?.changes || 0;
+  }
+  const res = db.prepare(`DELETE FROM reminders WHERE sent_at IS NULL`).run();
+  return res?.changes || 0;
+}
+
 export function getReminderById(id) {
   const db = getDB();
   return db.prepare(`SELECT * FROM reminders WHERE id = ?`).get(id);

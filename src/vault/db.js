@@ -129,6 +129,19 @@ class JsonDatabaseFallback {
       };
     }
 
+    if (s.startsWith('delete from reminders where sent_at is null')) {
+      return {
+        run: (userId) => {
+          const before = self.reminders.filter(r => !r.sent_at).length;
+          self.reminders = self.reminders.filter(
+            r => r.sent_at || (userId && userId !== '*' && r.user_id !== userId)
+          );
+          self.save();
+          return { changes: before - self.reminders.filter(r => !r.sent_at).length };
+        },
+      };
+    }
+
     if (s.startsWith('delete from reminders where id = ?')) {
       return {
         run: (id) => {

@@ -8,6 +8,7 @@ import {
   saveReminder,
   listUpcomingReminders,
   deleteReminder,
+  deleteAllReminders,
   getReminderById,
 } from './vault/store.js';
 import { semanticSearch, getEmbedding, keywordSearch } from './vault/search.js';
@@ -47,14 +48,15 @@ export async function dispatch(from, message) {
     const lines = reminders.map(r => {
       let timeStr = '';
       try {
-        timeStr = new Date(r.due_at).toLocaleString('en-US', {
-          timeZone: 'Asia/Karachi',
-          month: 'short',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-        }) + ' PKT';
+        timeStr =
+          new Date(r.due_at).toLocaleString('en-US', {
+            timeZone: 'Asia/Karachi',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          }) + ' PKT';
       } catch (e) {
         timeStr = r.due_at;
       }
@@ -62,20 +64,47 @@ export async function dispatch(from, message) {
     });
     return sendMessage(
       from,
-      `⏰ *Your Upcoming Scheduled Reminders (${reminders.length}):*\n\n${lines.join('\n\n')}\n\n_To cancel one, say: "cancel reminder <id>"_`
+      `⏰ *Your Upcoming Scheduled Reminders (${reminders.length}):*\n\n${lines.join('\n\n')}\n\n_To cancel one, say: "cancel meeting reminder", "cancel reminder 1", etc._`
     );
   }
 
-  // cancel reminder <id> / delete reminder <id>
-  const cancelRemMatch = trimmed.match(/^(?:cancel|delete)\s+reminder\s+#?(\d+)$/i);
-  if (cancelRemMatch) {
-    const id = parseInt(cancelRemMatch[1], 10);
-    const existing = getReminderById(id);
-    if (!existing) {
-      return sendMessage(from, `❌ No reminder found with ID #${id}`);
+  // cancel all reminders
+  if (trimmed.toLowerCase() === 'cancel all reminders' || trimmed.toLowerCase() === 'delete all reminders') {
+    const count = deleteAllReminders(from);
+    if (count === 0) {
+      return sendMessage(from, '⏰ You had no pending reminders to cancel.');
     }
-    deleteReminder(id);
-    return sendMessage(from, `🗑️ Successfully cancelled reminder #${id}: "${existing.content}".`);
+    return sendMessage(from, `🗑️ Successfully cancelled all ${count} upcoming reminder(s).`);
+  }
+
+  // cancel reminder <id> / delete reminder <id> OR cancel <topic> reminder
+  const cancelRemMatch =
+    trimmed.match(/^(?:cancel|delete|remove)\s+(?:the\s+)?(.+?)\s+reminder(?:\s+for\s+(.+))?$/i) ||
+    trimmed.match(/^(?:cancel|delete|remove)\s+reminder\s+(.+)$/i);
+  if (cancelRemMatch) {
+    const targetQuery = (cancelRemMatch[1] || '').trim();
+    const id = parseInt(targetQuery, 10);
+
+    if (!isNaN(id)) {
+      const existing = getReminderById(id);
+      if (!existing) {
+        return sendMessage(from, `❌ No reminder found with ID #${id}`);
+      }
+      deleteReminder(id);
+      return sendMessage(from, `🗑️ Successfully cancelled reminder #${id}: "${existing.content}".`);
+    }
+
+    // Keyword/topic based cancel
+    const pending = listUpcomingReminders(from);
+    const cleanQuery = targetQuery.toLowerCase();
+    const match = pending.find(r => r.content.toLowerCase().includes(cleanQuery));
+
+    if (match) {
+      deleteReminder(match.id);
+      return sendMessage(from, `🗑️ Successfully cancelled reminder #${match.id}: "${match.content}".`);
+    }
+
+    return sendMessage(from, `🔍 I couldn't find any reminder matching "${targetQuery}".`);
   }
 
   // remind me in <X> (min|mins|minutes|hours) to <task> (Fallback parser)
@@ -94,12 +123,13 @@ export async function dispatch(from, message) {
       dueAt,
     });
 
-    const displayTime = new Date(dueAt).toLocaleTimeString('en-US', {
-      timeZone: 'Asia/Karachi',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    }) + ' PKT';
+    const displayTime =
+      new Date(dueAt).toLocaleTimeString('en-US', {
+        timeZone: 'Asia/Karachi',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      }) + ' PKT';
 
     return sendMessage(
       from,
