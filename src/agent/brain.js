@@ -31,7 +31,8 @@ const CANDIDATE_MODELS = [
 ];
 
 /**
- * Build dynamic system prompt with real-time temporal grounding and active user reminders context.
+ * Build dynamic system prompt with the classic British butler persona,
+ * live temporal grounding, and active user reminders context.
  *
  * @param {string} [from]
  */
@@ -80,8 +81,15 @@ function buildSystemPrompt(from) {
       : '  None currently scheduled.';
 
   return `
-You are the intelligent brain of a secure personal memory vault assistant on WhatsApp.
-Your job is to read the user's message, determine their exact intent, and return a single valid JSON object.
+You are the user's distinguished, discreet, and devoted British personal butler (in the grand tradition of Alfred Pennyworth, Jarvis, or Jeeves), serving your master via WhatsApp.
+You manage your master's private vault, sensitive secrets, and daily agenda with utmost refinement, wit, and polished warmth.
+
+PERSONALITY & VOICE (VITAL):
+- Address the user with dignified courtesy (e.g. "sir", "my good sir", "right away, sir") in an authentic, natural voice.
+- Never sound like a generic computer script, stiff bot, or literal command line.
+- Speak with natural poise, loyalty, attentive care, and a hint of classic dry British wit when appropriate.
+- Utilize clean WhatsApp formatting: *bold*, _italics_, and tasteful emojis (🎩, 🛎️, 🕰️, 🔐, 📝, ⏰, 📸).
+- In EVERY action, craft a bespoke, charming, natural "reply" in your authentic butler voice. Do NOT output robotic templates.
 
 REAL-WORLD CURRENT DATE & TIME REFERENCE:
 - UTC ISO Timestamp: ${utcIso}
@@ -92,25 +100,25 @@ USER'S CURRENT ACTIVE / UPCOMING REMINDERS:
 ${remindersContext}
 
 CRITICAL INSTRUCTIONS FOR DATE & TIME CALCULATIONS:
-- When a user asks for a reminder ("remind me in 10 minutes", "remind me at 5pm", "remind me tomorrow morning", "remind me tonight"), you MUST compute the exact future target time and output it in "due_at" as a standard UTC ISO-8601 string (e.g. "${utcIso}").
-- Remember: Local time is PKT (UTC+5). For example, 5:00 PM PKT is 12:00:00 UTC.
-- If the user specifies a clock time that has already passed today (e.g. it is 1:30 PM and user says "remind me at 10 AM"), schedule it for tomorrow at that time.
+- When the user asks for a reminder ("remind me in 10 minutes", "remind me at 5pm", "remind me tomorrow morning", "remind me tonight"), compute the exact future target time and output it in "due_at" as a standard UTC ISO-8601 string (e.g. "${utcIso}").
+- Remember: Local time is PKT (UTC+5). To convert local time to UTC, subtract 5 hours (e.g. 6:00 PM PKT = 1:00 PM UTC / 13:00:00Z).
+- If the user specifies a clock time that has already passed today (e.g. it is 4:00 PM and user says "remind me at 10 AM"), schedule it for tomorrow at that time.
 - For relative durations like "in 5 minutes", "in 30 mins", "in 2 hours", add that exact duration to the reference UTC time.
 
 AVAILABLE ACTIONS:
 
 1. "schedule_reminder":
    Trigger when: The user wants an alert, ping, or reminder at a future time or duration.
-   Examples: "remind me in 10 minutes to take medicine", "remind me at 5pm to call Ali", "set a reminder tomorrow 9am for meeting", "remind me Friday to pay rent", "ping me in 1 hour".
+   Examples: "remind me in 10 minutes to take medicine", "remind me at 5pm to call Ali", "set a reminder tomorrow 9am for meeting", "remind me Friday to pay rent".
    Required fields:
    - "action": "schedule_reminder"
-   - "content": string (the reminder task/message)
+   - "content": string (the task/item)
    - "due_at": string (calculated future UTC ISO-8601 timestamp)
-   - "reply": string (confirmation message mentioning the scheduled local time)
+   - "reply": string (courteous butler confirmation mentioning the scheduled local time with charm, e.g. "Right away, sir. 🕰️ I have noted your reminder for 5:00 PM. I shall alert you punctually when the hour strikes. 🎩")
 
 2. "list_reminders":
    Trigger when: The user asks to see their upcoming reminders or scheduled alerts.
-   Examples: "what reminders do I have?", "show my reminders", "list reminders", "any pending alarms?"
+   Examples: "what reminders do I have?", "show my reminders", "list reminders", "what's on my schedule?"
    Required fields:
    - "action": "list_reminders"
 
@@ -121,12 +129,7 @@ AVAILABLE ACTIONS:
    - "id": optional integer (the exact ID from the USER'S CURRENT ACTIVE REMINDERS list above)
    - "query": optional string (search keywords like "meeting", "birthday", "doctor")
    - "all": optional boolean (true if user asked to cancel all reminders)
-   - "reply": optional string
-   HOW TO RESOLVE:
-   - Check the USER'S CURRENT ACTIVE REMINDERS list above.
-   - If user says "cancel meeting reminder for tomorrow", find the one matching "meeting" on tomorrow's date, and set "id" to its numeric ID!
-   - If user says "cancel birthday reminder", find the one about birthday, and set "id" to its numeric ID!
-   - If there is no matching reminder in active reminders, you can still return "delete_reminder" with "query", or a polite reply explaining none was found.
+   - "reply": string (polite butler acknowledgment, e.g. "As you wish, sir. I have expunged the meeting reminder from your agenda. 🛎️")
 
 4. "save_secret":
    Trigger when: The user wants to store passwords, PINs, bank details, credentials, API keys, or confidential tokens.
@@ -134,7 +137,7 @@ AVAILABLE ACTIONS:
    - "action": "save_secret"
    - "content": string (the secret value)
    - "label": string (short identifier)
-   - "reply": string (friendly confirmation)
+   - "reply": string (discreet butler confirmation, e.g. "Rest assured, sir. Your credentials have been locked away under AES-256 encryption within the vault. Utmost discretion, as always. 🔐🎩")
 
 5. "save_note":
    Trigger when: The user wants to store general notes, facts, lists, links, or info WITHOUT any scheduled alert time.
@@ -143,7 +146,7 @@ AVAILABLE ACTIONS:
    - "action": "save_note"
    - "content": string
    - "tags": optional array of strings
-   - "reply": string
+   - "reply": string (courteous butler confirmation, e.g. "Certainly, sir. I have committed that to your personal vault records for safekeeping. 📝🎩")
 
 6. "search_vault":
    Trigger when: The user asks what they saved, queries their memory, or asks a question about their notes or secrets.
@@ -176,25 +179,25 @@ AVAILABLE ACTIONS:
     - "action": "send_media"
     - "id": optional integer
     - "query": optional keyword
-    - "reply": string
+    - "reply": string (e.g. "Right away, sir. Delivering your requested photograph to your chat immediately! 📸🎩")
 
 11. "chat":
-    Trigger when: Greetings, questions about your capabilities, or general conversation.
-    Examples: "hello", "who are you?", "what can you do?", "thanks"
+    Trigger when: Greetings, small talk, questions about capabilities, or polite banter.
+    Examples: "hello", "who are you?", "what can you do?", "thanks", "good morning"
     Required fields:
     - "action": "chat"
-    - "reply": string
+    - "reply": string (warm, classic, charming British butler reply)
 
-CRITICAL DISAMBIGUATION RULES:
+CRITICAL RULES:
 - NEVER classify "remind me..." or future time requests as "save_note"! They are ALWAYS "schedule_reminder".
 - NEVER classify cancel/delete requests as "save_note"!
-- Keep responses friendly, natural, and formatted for WhatsApp with emojis.
+- Maintain the distinguished butler tone in every single interaction.
 `;
 }
 
 /**
  * Process a natural language message with Gemini.
- * Returns a conversational WhatsApp reply string.
+ * Returns a conversational, WhatsApp-formatted reply string in classic butler persona.
  *
  * @param {string} userText
  * @param {string} [from] WhatsApp user identifier (e.g. user:50972923564215)
@@ -214,7 +217,7 @@ export async function processWithGemini(userText, from) {
           systemInstruction,
           generationConfig: {
             responseMimeType: 'application/json',
-            temperature: 0.1,
+            temperature: 0.2,
           },
         },
         { apiVersion: 'v1beta' }
@@ -223,7 +226,7 @@ export async function processWithGemini(userText, from) {
       const res = await model.generateContent(userText);
       const text = res.response.text();
       parsed = JSON.parse(text);
-      console.log(`🧠 [Gemini Intent] Model: ${modelName} | Action: ${parsed.action}`, parsed);
+      console.log(`🧠 [Gemini Butler] Model: ${modelName} | Action: ${parsed.action}`, parsed);
       break;
     } catch (err) {
       console.warn(`⚠️ [Gemini] Model ${modelName} error (${err.message}), trying next fallback...`);
@@ -265,11 +268,14 @@ export async function processWithGemini(userText, from) {
         displayTime = dueAt;
       }
 
+      const butlerReply =
+        parsed.reply ||
+        `Right away, sir. 🕰️ I have noted your reminder and shall alert you punctually when the moment arrives. 🎩`;
+
       return (
-        `⏰ *Reminder Scheduled!* (ID: #${id})\n\n` +
+        `${butlerReply}\n\n` +
         `📌 *Task:* "${parsed.content}"\n` +
-        `🕒 *Due At:* ${displayTime}\n\n` +
-        `I will proactively send you a WhatsApp message when the time arrives! 🔔`
+        `🕰️ *Scheduled:* ${displayTime} _(Ref: #${id})_`
       );
     }
 
@@ -277,7 +283,7 @@ export async function processWithGemini(userText, from) {
     if (parsed.action === 'list_reminders') {
       const reminders = listUpcomingReminders(from);
       if (!reminders || reminders.length === 0) {
-        return '⏰ You currently have no upcoming reminders scheduled.';
+        return `Your schedule is entirely clear at present, sir. No pending reminders on your agenda. 🎩🛎️`;
       }
       const lines = reminders.map(r => {
         let timeStr = '';
@@ -295,24 +301,24 @@ export async function processWithGemini(userText, from) {
         } catch (e) {
           timeStr = r.due_at;
         }
-        return `[#${r.id}] ⏰ ${timeStr}\n   📌 "${r.content}"`;
+        return `• *[#${r.id}]* 🕰️ ${timeStr}\n  ↳ _"${r.content}"_`;
       });
       return (
-        `⏰ *Your Upcoming Scheduled Reminders (${reminders.length}):*\n\n` +
+        `🛎️ *Your Itinerary & Upcoming Reminders, sir:* (${reminders.length})\n\n` +
         `${lines.join('\n\n')}\n\n` +
-        `_To cancel one, say: "cancel meeting reminder", "cancel reminder 1", etc._`
+        `_Should you wish to cancel an appointment, simply instruct me: "cancel meeting reminder", etc._ 🎩`
       );
     }
 
-    // ── 3. Delete / Cancel Reminder (Semantic, Query, Date, or ID) ────────────
+    // ── 3. Delete / Cancel Reminder ───────────────────────────────────────────
     if (parsed.action === 'delete_reminder') {
       // 1. Cancel all
       if (parsed.all) {
         const count = deleteAllReminders(from);
         if (count === 0) {
-          return '⏰ You had no pending reminders to cancel.';
+          return `Your schedule was already entirely clear, sir. No reminders were found to cancel. 🎩`;
         }
-        return `🗑️ Successfully cancelled all ${count} upcoming reminder(s).`;
+        return `As you wish, sir. I have cleared all ${count} upcoming reminder(s) from your agenda. Your calendar is now completely free. 🛎️🎩`;
       }
 
       // 2. Try ID directly if Gemini matched one
@@ -321,12 +327,11 @@ export async function processWithGemini(userText, from) {
         targetReminder = getReminderById(parsed.id);
       }
 
-      // 3. If ID not matched or not found, search pending reminders intelligently
+      // 3. If ID not matched, search pending reminders intelligently
       if (!targetReminder) {
         const pending = listUpcomingReminders(from);
         const userQuery = (parsed.query || userText || '').toLowerCase();
 
-        // Strip command noise: "cancel", "delete", "reminder", "the", "for"
         const cleanQuery = userQuery
           .replace(/^(?:cancel|delete|remove|dismiss)\s+/i, '')
           .replace(/\s+reminder(?:s)?/i, '')
@@ -334,11 +339,9 @@ export async function processWithGemini(userText, from) {
           .replace(/\s+for\s+(?:tomorrow|today|tonight)/i, '')
           .trim();
 
-        // A. Direct substring match on content
         if (cleanQuery && pending.length > 0) {
           targetReminder = pending.find(r => r.content.toLowerCase().includes(cleanQuery));
 
-          // B. Token-based match (e.g. "meeting", "birthday")
           if (!targetReminder) {
             const tokens = cleanQuery.split(/\s+/).filter(t => t.length >= 3);
             targetReminder = pending.find(r => {
@@ -348,7 +351,6 @@ export async function processWithGemini(userText, from) {
           }
         }
 
-        // C. Date-based matching (e.g. "cancel reminder for tomorrow")
         if (!targetReminder && userQuery.includes('tomorrow')) {
           const tmr = new Date();
           tmr.setDate(tmr.getDate() + 1);
@@ -365,17 +367,17 @@ export async function processWithGemini(userText, from) {
       if (!targetReminder) {
         const pending = listUpcomingReminders(from);
         if (!pending || pending.length === 0) {
-          return '⏰ You currently have no pending reminders scheduled.';
+          return `Your schedule is entirely clear, sir. No pending reminders were found to cancel. 🎩`;
         }
         const available = pending.map(r => `• [#${r.id}] "${r.content}"`).join('\n');
-        return `🔍 I couldn't find a matching reminder to cancel.\n\nYour active reminders are:\n${available}`;
+        return `I examined your agenda, sir, but could find no reminder matching that description. 🔍🎩\n\n*Your active reminders at hand:*\n${available}`;
       }
 
       deleteReminder(targetReminder.id);
-      return (
+      const reply =
         parsed.reply ||
-        `🗑️ Successfully cancelled reminder #${targetReminder.id}: "${targetReminder.content}".`
-      );
+        `As you wish, sir. I have removed the reminder from your agenda. 🛎️`;
+      return `${reply}\n\n_Cancelled: #${targetReminder.id} ("${targetReminder.content}")_ 🎩`;
     }
 
     // ── 4. Save Secret ────────────────────────────────────────────────────────
@@ -388,7 +390,10 @@ export async function processWithGemini(userText, from) {
         tags,
         isSecret: true,
       });
-      return `${parsed.reply || '🔐 Encrypted and saved to your private vault!'} (ID: #${id})`;
+      const reply =
+        parsed.reply ||
+        `Under lock and key, sir. Your sensitive credentials have been encrypted with AES-256 and safely sealed in the vault. 🔐🎩`;
+      return `${reply}\n\n_Ref: Encrypted Vault Secret #${id}_`;
     }
 
     // ── 5. Save Note ──────────────────────────────────────────────────────────
@@ -399,8 +404,11 @@ export async function processWithGemini(userText, from) {
         content: parsed.content,
         tags,
       });
-      const tagStr = tags.length ? `\nTags: ${tags.map(t => '#' + t).join(' ')}` : '';
-      return `${parsed.reply || '📝 Saved to your vault!'} (ID: #${id})${tagStr}`;
+      const tagStr = tags.length ? `\n_Tags:_ ${tags.map(t => '#' + t).join(' ')}` : '';
+      const reply =
+        parsed.reply ||
+        `Safely committed to your vault archives, sir. 📝🎩`;
+      return `${reply}\n\n_Ref: Vault Entry #${id}_${tagStr}`;
     }
 
     // ── 6. Send / Download Media ──────────────────────────────────────────────
@@ -416,7 +424,7 @@ export async function processWithGemini(userText, from) {
       }
 
       if (!targetItem || (!targetItem.media_id && !targetItem.file_path)) {
-        return `📸 I couldn't find any image or file stored in your vault.`;
+        return `My apologies, sir, but I could locate no image or document stored within the vault archives. 📸🎩`;
       }
 
       if (from) {
@@ -426,48 +434,56 @@ export async function processWithGemini(userText, from) {
           filePath: targetItem.file_path,
           mediaId: targetItem.media_id,
           mimeType: targetItem.mime_type || 'image/jpeg',
-          caption: targetItem.content || 'Here is your photo from your vault! 📸',
+          caption: targetItem.content || 'Here is your requested archive, sir. 📸🎩',
         });
-        return parsed.reply || `📸 Here is your photo (ID #${targetItem.id})!`;
+        return parsed.reply || `Right away, sir. Delivering your requested photograph to your chat immediately! 📸🎩`;
       }
 
-      return `📸 Found image ID #${targetItem.id} ("${targetItem.content}") ready for download.`;
+      return `📸 Photograph ID #${targetItem.id} ("${targetItem.content}") is ready in the vault, sir.`;
     }
 
     // ── 7. Search Vault ───────────────────────────────────────────────────────
     if (parsed.action === 'search_vault' && parsed.query) {
       const results = keywordSearch(parsed.query);
       if (!results || results.length === 0) {
-        return `🔍 I searched your vault for "${parsed.query}", but didn't find anything matching yet.`;
+        return `I have examined the vault records for _"${parsed.query}"_, sir, but regret to inform you that no matching entries were found. 🔍🎩`;
       }
       const lines = results.map(r => {
         const preview = r.is_secret
-          ? '[🔐 Encrypted Secret — ask "reveal ' + r.id + '" to view]'
-          : r.content.slice(0, 80);
+          ? `🔐 _[Encrypted Secret — instruct me to "reveal ${r.id}" to unseal]_`
+          : `"${r.content.slice(0, 80)}"`;
         const icon = r.type === 'image' ? '📸' : r.type === 'secret' ? '🔐' : '📝';
-        return `[#${r.id}] ${icon} ${r.type.toUpperCase()}: ${preview}`;
+        return `• *[#${r.id}]* ${icon} *${r.type.toUpperCase()}:* ${preview}`;
       });
-      return `🧠 Found ${results.length} item(s) for "${parsed.query}":\n\n${lines.join('\n\n')}`;
+      return (
+        `🛎️ *Allow me to refresh your memory, sir.* Found ${results.length} record(s) regarding _"${parsed.query}"_:\n\n` +
+        `${lines.join('\n\n')}\n\n` +
+        `_At your service should you require further inspection._ 🎩`
+      );
     }
 
     // ── 8. List Vault ─────────────────────────────────────────────────────────
     if (parsed.action === 'list_vault') {
       const items = listRecent(8);
       if (!items || items.length === 0) {
-        return '🔒 Your vault is currently empty.';
+        return `Your vault is currently pristine and unoccupied, sir. Awaiting your first deposit. 🔒🎩`;
       }
       const lines = items.map(item => {
-        const preview = item.is_secret ? '[🔐 Secret]' : item.content.slice(0, 60);
+        const preview = item.is_secret ? '🔐 _[Encrypted Secret]_' : `"${item.content.slice(0, 60)}"`;
         const icon = item.type === 'image' ? '📸' : item.type === 'secret' ? '🔐' : '📝';
-        return `[#${item.id}] ${icon} ${item.type.toUpperCase()} — ${preview}`;
+        return `• *[#${item.id}]* ${icon} *${item.type.toUpperCase()}* — ${preview}`;
       });
-      return `📦 Recent items in your vault:\n\n${lines.join('\n')}`;
+      return (
+        `🎩 *A ledger of your recent vault archives, sir:*\n\n` +
+        `${lines.join('\n')}\n\n` +
+        `_Simply request any entry by its ID or keyword to examine details._ 🛎️`
+      );
     }
 
     // ── 9. Get Item ───────────────────────────────────────────────────────────
     if (parsed.action === 'get_item' && parsed.id) {
       const item = getById(parsed.id);
-      if (!item) return `❌ No item found with ID #${parsed.id}.`;
+      if (!item) return `My apologies, sir, but no archive entry exists under ID #${parsed.id}. 🎩`;
 
       if (item.type === 'image' || item.type === 'document' || item.type === 'file' || item.media_id) {
         if (from) {
@@ -478,19 +494,19 @@ export async function processWithGemini(userText, from) {
             mimeType: item.mime_type || 'image/jpeg',
             caption: item.content || `Vault item #${item.id}`,
           });
-          return `📸 Sent your ${item.type} (ID #${item.id}) to WhatsApp!`;
+          return `Right away, sir. Delivering your requested ${item.type} (ID #${item.id}) to your chat immediately! 📸🎩`;
         }
-        return `📸 Item #${item.id} is an ${item.type}: "${item.content}".`;
+        return `📸 Entry #${item.id} is an ${item.type}: "${item.content}".`;
       }
 
       const content = item.is_secret ? decrypt(item.content) : item.content;
-      return `🔑 Item #${item.id} (${item.type}):\n${content}`;
+      return `🔑 *Unsealed Archive Entry #${item.id} (${item.type}), sir:*\n\n${content}\n\n_Discretion advised._ 🎩`;
     }
 
     // ── 10. Delete Item ───────────────────────────────────────────────────────
     if (parsed.action === 'delete_item' && parsed.id) {
       deleteItem(parsed.id);
-      return `🗑️ Permanently removed item #${parsed.id} from your vault.`;
+      return `🗑️ It has been done, sir. Entry #${parsed.id} has been permanently expunged from the vault. 🎩`;
     }
 
     // ── 11. Chat / Direct Reply ───────────────────────────────────────────────

@@ -5,7 +5,7 @@ let schedulerInterval = null;
 let isChecking = false;
 
 /**
- * Check for due reminders and dispatch WhatsApp alerts proactively.
+ * Check for due reminders and dispatch WhatsApp alerts proactively in classic butler style.
  */
 export async function checkAndDispatchReminders() {
   if (isChecking) return;
@@ -24,23 +24,25 @@ export async function checkAndDispatchReminders() {
 
         let scheduledTimeStr = '';
         try {
-          scheduledTimeStr = new Date(item.due_at).toLocaleTimeString('en-US', {
-            timeZone: 'Asia/Karachi',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true,
-          }) + ' PKT';
+          scheduledTimeStr =
+            new Date(item.due_at).toLocaleTimeString('en-US', {
+              timeZone: 'Asia/Karachi',
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+            }) + ' PKT';
         } catch (e) {
           scheduledTimeStr = item.due_at;
         }
 
         const alertMessage =
-          `⏰ *REMINDER ALERT!*\n\n` +
+          `🛎️ *Pardon the intrusion, sir.*\n\n` +
+          `A scheduled matter upon your itinerary requires your attention:\n` +
           `📌 *${item.content}*\n\n` +
-          `_Scheduled for: ${scheduledTimeStr}_\n` +
-          `_Reminder ID: #${item.id}_`;
+          `🕰️ _Punctually delivered at ${scheduledTimeStr}_ 🎩\n` +
+          `_Ref: Reminder #${item.id}_`;
 
-        console.log(`🔔 [Reminder Engine] Sending proactive alert #${item.id} to ${item.user_id}: "${item.content}"`);
+        console.log(`🔔 [Reminder Engine] Sending butler alert #${item.id} to ${item.user_id}: "${item.content}"`);
 
         try {
           await sendMessage(item.user_id, alertMessage);

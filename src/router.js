@@ -37,13 +37,13 @@ export async function dispatch(from, message) {
     }
   }
 
-  // ── 2. Fallback Manual Commands ──────────────────────────────────────────
+  // ── 2. Fallback Manual Commands (Butler Persona) ─────────────────────────
 
   // list reminders / reminders
   if (trimmed.toLowerCase() === 'reminders' || trimmed.toLowerCase() === 'list reminders') {
     const reminders = listUpcomingReminders(from);
     if (!reminders || reminders.length === 0) {
-      return sendMessage(from, '⏰ You currently have no upcoming reminders scheduled.');
+      return sendMessage(from, 'Your schedule is entirely clear at present, sir. No pending reminders on your agenda. 🎩🛎️');
     }
     const lines = reminders.map(r => {
       let timeStr = '';
@@ -51,6 +51,7 @@ export async function dispatch(from, message) {
         timeStr =
           new Date(r.due_at).toLocaleString('en-US', {
             timeZone: 'Asia/Karachi',
+            weekday: 'short',
             month: 'short',
             day: 'numeric',
             hour: 'numeric',
@@ -60,11 +61,11 @@ export async function dispatch(from, message) {
       } catch (e) {
         timeStr = r.due_at;
       }
-      return `[#${r.id}] ⏰ ${timeStr}\n   📌 "${r.content}"`;
+      return `• *[#${r.id}]* 🕰️ ${timeStr}\n  ↳ _"${r.content}"_`;
     });
     return sendMessage(
       from,
-      `⏰ *Your Upcoming Scheduled Reminders (${reminders.length}):*\n\n${lines.join('\n\n')}\n\n_To cancel one, say: "cancel meeting reminder", "cancel reminder 1", etc._`
+      `🛎️ *Your Itinerary & Upcoming Reminders, sir:* (${reminders.length})\n\n${lines.join('\n\n')}\n\n_Should you wish to cancel an entry, simply instruct me: "cancel meeting reminder", etc._ 🎩`
     );
   }
 
@@ -72,9 +73,12 @@ export async function dispatch(from, message) {
   if (trimmed.toLowerCase() === 'cancel all reminders' || trimmed.toLowerCase() === 'delete all reminders') {
     const count = deleteAllReminders(from);
     if (count === 0) {
-      return sendMessage(from, '⏰ You had no pending reminders to cancel.');
+      return sendMessage(from, 'Your schedule was already entirely clear, sir. No reminders were found to cancel. 🎩');
     }
-    return sendMessage(from, `🗑️ Successfully cancelled all ${count} upcoming reminder(s).`);
+    return sendMessage(
+      from,
+      `As you wish, sir. I have cleared all ${count} upcoming reminder(s) from your agenda. Your calendar is now completely free. 🛎️🎩`
+    );
   }
 
   // cancel reminder <id> / delete reminder <id> OR cancel <topic> reminder
@@ -88,10 +92,13 @@ export async function dispatch(from, message) {
     if (!isNaN(id)) {
       const existing = getReminderById(id);
       if (!existing) {
-        return sendMessage(from, `❌ No reminder found with ID #${id}`);
+        return sendMessage(from, `My apologies, sir, but no reminder exists under ID #${id}. 🎩`);
       }
       deleteReminder(id);
-      return sendMessage(from, `🗑️ Successfully cancelled reminder #${id}: "${existing.content}".`);
+      return sendMessage(
+        from,
+        `As you wish, sir. I have removed reminder #${id} ("${existing.content}") from your agenda. 🛎️🎩`
+      );
     }
 
     // Keyword/topic based cancel
@@ -101,10 +108,13 @@ export async function dispatch(from, message) {
 
     if (match) {
       deleteReminder(match.id);
-      return sendMessage(from, `🗑️ Successfully cancelled reminder #${match.id}: "${match.content}".`);
+      return sendMessage(
+        from,
+        `As you wish, sir. I have removed reminder #${match.id} ("${match.content}") from your agenda. 🛎️🎩`
+      );
     }
 
-    return sendMessage(from, `🔍 I couldn't find any reminder matching "${targetQuery}".`);
+    return sendMessage(from, `I examined your agenda, sir, but could find no reminder matching "${targetQuery}". 🔍🎩`);
   }
 
   // remind me in <X> (min|mins|minutes|hours) to <task> (Fallback parser)
@@ -133,19 +143,25 @@ export async function dispatch(from, message) {
 
     return sendMessage(
       from,
-      `⏰ *Reminder Scheduled!* (ID: #${id})\n\n📌 *Task:* "${task}"\n🕒 *Due At:* ${displayTime}\n\nI will proactively send you a WhatsApp message when the time arrives! 🔔`
+      `Right away, sir. 🕰️ I have noted your reminder and shall alert you punctually when the moment arrives.\n\n` +
+      `📌 *Task:* "${task}"\n` +
+      `🕰️ *Scheduled:* ${displayTime} _(Ref: #${id})_ 🎩`
     );
   }
 
   // list (vault items)
   if (trimmed.toLowerCase() === 'list') {
     const items = listRecent(10);
-    if (!items.length) return sendMessage(from, '🔒 Your vault is empty.');
+    if (!items.length) return sendMessage(from, 'Your vault is currently pristine and unoccupied, sir. Awaiting your first deposit. 🔒🎩');
     const lines = items.map(item => {
-      const preview = item.is_secret ? '[🔐 Secret]' : item.content.slice(0, 60);
-      return `[${item.id}] ${item.type.toUpperCase()} — ${preview}`;
+      const preview = item.is_secret ? '🔐 _[Encrypted Secret]_' : `"${item.content.slice(0, 60)}"`;
+      const icon = item.type === 'image' ? '📸' : item.type === 'secret' ? '🔐' : '📝';
+      return `• *[#${item.id}]* ${icon} *${item.type.toUpperCase()}* — ${preview}`;
     });
-    return sendMessage(from, `📦 Last ${items.length} items:\n\n${lines.join('\n')}`);
+    return sendMessage(
+      from,
+      `🎩 *A ledger of your recent vault archives, sir:*\n\n${lines.join('\n')}\n\n_Simply request any entry by its ID or keyword to examine details._ 🛎️`
+    );
   }
 
   // delete <id>
@@ -153,9 +169,9 @@ export async function dispatch(from, message) {
   if (deleteMatch) {
     const id = parseInt(deleteMatch[1], 10);
     const item = getById(id);
-    if (!item) return sendMessage(from, `❌ No item with ID ${id}`);
+    if (!item) return sendMessage(from, `My apologies, sir, but no archive entry exists under ID #${id}. 🎩`);
     deleteItem(id);
-    return sendMessage(from, `🗑️ Deleted item #${id}`);
+    return sendMessage(from, `🗑️ It has been done, sir. Entry #${id} has been permanently expunged from the vault. 🎩`);
   }
 
   // get <id> (reveal secret or send media file)
@@ -165,11 +181,10 @@ export async function dispatch(from, message) {
   if (getMatch) {
     const id = parseInt(getMatch[1], 10);
     const item = getById(id);
-    if (!item) return sendMessage(from, `❌ No item with ID #${id}`);
+    if (!item) return sendMessage(from, `My apologies, sir, but no archive entry exists under ID #${id}. 🎩`);
 
-    // If it is an image, document, or has a media_id, send the actual file!
     if (item.type === 'image' || item.type === 'document' || item.type === 'file' || item.media_id) {
-      await sendMessage(from, `📸 Sending your ${item.type} (ID #${id}) ...`);
+      await sendMessage(from, `Right away, sir. Delivering your requested ${item.type} (ID #${id}) to your chat immediately! 📸🎩`);
       await sendMediaMessage(from, {
         type: item.type === 'document' ? 'document' : 'image',
         filePath: item.file_path,
@@ -181,13 +196,13 @@ export async function dispatch(from, message) {
     }
 
     const content = item.is_secret ? decrypt(item.content) : item.content;
-    return sendMessage(from, `🔑 #${id} (${item.type}):\n${content}`);
+    return sendMessage(from, `🔑 *Unsealed Archive Entry #${id} (${item.type}), sir:*\n\n${content}\n\n_Discretion advised._ 🎩`);
   }
 
   // media / file attachment
   if (msgType !== 'text' && mediaId) {
     const isImage = msgType === 'image';
-    const defaultCaption = isImage ? 'Uploaded photo' : `File (${mimeType})`;
+    const defaultCaption = isImage ? 'Uploaded photograph' : `Document (${mimeType})`;
     const id = save({
       type: msgType,
       content: caption || defaultCaption,
@@ -199,8 +214,8 @@ export async function dispatch(from, message) {
     return sendMessage(
       from,
       isImage
-        ? `📸 Photo securely saved to your vault! ID: #${id}${caption ? `\nCaption: "${caption}"` : ''}\n\nAsk me anytime: "send photo #${id}" to get it back!`
-        : `📎 File saved to your vault! ID: #${id}\nType: ${mimeType}${caption ? `\nCaption: ${caption}` : ''}`
+        ? `📸 Your photograph has been deposited into the vault for safekeeping, sir! _(Ref: #${id})_${caption ? `\n_Caption:_ "${caption}"` : ''}\n\nInstruct me anytime: "send photo #${id}" to have it returned!`
+        : `📎 Document deposited into your vault, sir! _(Ref: #${id})_\n_Type:_ ${mimeType}${caption ? `\n_Caption:_ ${caption}` : ''}`
     );
   }
 
@@ -209,7 +224,7 @@ export async function dispatch(from, message) {
 
   // Search intent
   if (isSearch) {
-    await sendMessage(from, '🔍 Searching your vault...');
+    await sendMessage(from, 'Checking our vault archives for you, sir... 🔍🎩');
 
     let cleanQuery = trimmed;
     const prefixes = [
@@ -241,23 +256,29 @@ export async function dispatch(from, message) {
     if (semanticResults && semanticResults.length > 0) {
       const lines = semanticResults.map(r => {
         const preview = r.is_secret
-          ? '[🔐 Secret — use `get <id>` to reveal]'
-          : r.content.slice(0, 80);
-        return `[${r.id}] ${r.type.toUpperCase()} — ${preview}`;
+          ? '[🔐 Encrypted Secret — instruct me to "reveal ' + r.id + '" to unseal]'
+          : `"${r.content.slice(0, 80)}"`;
+        return `• *[#${r.id}]* *${r.type.toUpperCase()}:* ${preview}`;
       });
-      return sendMessage(from, `🧠 Found ${semanticResults.length} result(s):\n\n${lines.join('\n\n')}`);
+      return sendMessage(
+        from,
+        `🛎️ *Allow me to refresh your memory, sir.* Found ${semanticResults.length} record(s):\n\n${lines.join('\n\n')}\n\n_At your service._ 🎩`
+      );
     }
 
     const kwResults = keywordSearch(cleanQuery);
     if (kwResults.length > 0) {
       const lines = kwResults.map(r => {
-        const preview = r.is_secret ? '[🔐 Secret]' : r.content.slice(0, 80);
-        return `[${r.id}] ${r.type.toUpperCase()} — ${preview}`;
+        const preview = r.is_secret ? '🔐 _[Encrypted Secret]_' : `"${r.content.slice(0, 80)}"`;
+        return `• *[#${r.id}]* *${r.type.toUpperCase()}:* ${preview}`;
       });
-      return sendMessage(from, `🔤 Keyword results for "${cleanQuery}":\n\n${lines.join('\n\n')}`);
+      return sendMessage(
+        from,
+        `🛎️ *Allow me to refresh your memory, sir.* Found ${kwResults.length} record(s) matching _"${cleanQuery}"_:\n\n${lines.join('\n\n')}\n\n_At your service._ 🎩`
+      );
     }
 
-    return sendMessage(from, `🤷 Nothing found for: "${cleanQuery}"`);
+    return sendMessage(from, `I searched our records for _"${cleanQuery}"_, sir, but found no matching entries. 🔍🎩`);
   }
 
   // store item
@@ -280,7 +301,10 @@ export async function dispatch(from, message) {
 
   const id = save({ type, content: storedContent, tags, embedding, isSecret });
 
-  const tagStr = tags.length ? `\nTags: ${tags.map(t => '#' + t).join(' ')}` : '';
+  const tagStr = tags.length ? `\n_Tags:_ ${tags.map(t => '#' + t).join(' ')}` : '';
   const icon = ICONS[type] || '📦';
-  return sendMessage(from, `${icon} Saved! ID: #${id}${tagStr}`);
+  return sendMessage(
+    from,
+    `${icon} Safely committed to your vault archives, sir. _(Ref: #${id})_${tagStr} 🎩`
+  );
 }
