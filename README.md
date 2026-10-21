@@ -1,4 +1,4 @@
-# 🔒 WhatsApp Private Vault MVP
+# 🔒 WhatsApp Private Vault MVP!
 
 A personal private vault you control entirely through WhatsApp (or via the built-in web simulator). Send text, links, secrets, or files — they are stored securely. Ask questions in plain language or keywords, and the vault retrieves the exact item.
 
