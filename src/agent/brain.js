@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { save, listRecent, deleteItem, getById } from '../vault/store.js';
 import { keywordSearch } from '../vault/search.js';
 import { encrypt, decrypt } from '../vault/crypto.js';
+import { sendMediaMessage } from '../whatsapp/media.js';
 
 let genAI = null;
 
@@ -22,7 +23,7 @@ Available actions:
    Required fields: "content" (the secret value), "label" (short title), "reply" (friendly confirmation)
 2. "save_note": When the user wants to remember or save regular notes, ideas, reminders, tasks, links, or facts.
    Required fields: "content" (the text), "tags" (optional array of category strings), "reply" (friendly confirmation)
-3. "search_vault": When the user asks a question about what they saved, asks where something is, or wants to recall something.
+3. "search_vault": When the user asks a question about what they saved, asks where something is, or wants to recall notes.
    Required fields: "query" (the keyword or topic to search)
 4. "list_vault": When the user asks to see recent notes, list everything, or check their memory.
    Required fields: "reply"
@@ -30,19 +31,25 @@ Available actions:
    Required fields: "id" (integer)
 6. "delete_item": When the user asks to delete or forget a specific item by ID (e.g. "delete 2", "remove note 1").
    Required fields: "id" (integer)
-7. "chat": General greetings, small talk, or questions about what you can do.
+7. "send_media": When the user asks to see, send, return, download, or show an image, photo, picture, or document (e.g. "send me the photo", "show me my picture", "give me the image I sent", "download image 2", "send me the file").
+   Required fields: "id" (optional integer ID if mentioned), "query" (optional keyword like "photo"), "reply" (e.g. "Sending your photo now! 📸")
+8. "chat": General greetings, small talk, or questions about what you can do.
    Required fields: "reply"
 
 Rules:
 - NEVER leave passwords unencrypted; always classify them as "save_secret".
+- If the user asks for an image, photo, or file to be sent/downloaded, ALWAYS use "send_media".
 - Keep replies concise, helpful, and natural for WhatsApp with emojis.
 `;
 
 /**
  * Process a natural language message with Gemini.
  * Returns a conversational WhatsApp reply string.
+ *
+ * @param {string} userText
+ * @param {string} [from] WhatsApp user identifier (e.g. user:50972923564215)
  */
-export async function processWithGemini(userText) {
+export async function processWithGemini(userText, from) {
   const client = getGenAI();
   if (!client) return null;
 
@@ -86,6 +93,38 @@ export async function processWithGemini(userText) {
       return `${parsed.reply || '📝 Saved to your vault!'} (ID: #${id})${tagStr}`;
     }
 
+    // ── Send / Download Media ─────────────────────────────────────────────────
+    if (parsed.action === 'send_media') {
+      let targetItem = null;
+      if (parsed.id) {
+        targetItem = getById(parsed.id);
+      } else {
+        // Find the most recent image or file
+        const recent = listRecent(20);
+        targetItem = recent.find(
+          i => i.type === 'image' || i.type === 'file' || i.type === 'document' || i.media_id
+        );
+      }
+
+      if (!targetItem || (!targetItem.media_id && !targetItem.file_path)) {
+        return `📸 I couldn't find any image or file stored in your vault.`;
+      }
+
+      if (from) {
+        console.log(`🚀 [Gemini] Dispatching media ID #${targetItem.id} to ${from}...`);
+        await sendMediaMessage(from, {
+          type: targetItem.type === 'document' ? 'document' : 'image',
+          filePath: targetItem.file_path,
+          mediaId: targetItem.media_id,
+          mimeType: targetItem.mime_type || 'image/jpeg',
+          caption: targetItem.content || 'Here is your photo from your vault! 📸',
+        });
+        return parsed.reply || `📸 Here is your photo (ID #${targetItem.id})!`;
+      }
+
+      return `📸 Found image ID #${targetItem.id} ("${targetItem.content}") ready for download.`;
+    }
+
     if (parsed.action === 'search_vault' && parsed.query) {
       const results = keywordSearch(parsed.query);
       if (!results || results.length === 0) {
@@ -95,19 +134,21 @@ export async function processWithGemini(userText) {
         const preview = r.is_secret
           ? '[🔐 Encrypted Secret — ask "reveal ' + r.id + '" to view]'
           : r.content.slice(0, 80);
-        return `[#${r.id}] ${r.type.toUpperCase()}: ${preview}`;
+        const icon = r.type === 'image' ? '📸' : r.type === 'secret' ? '🔐' : '📝';
+        return `[#${r.id}] ${icon} ${r.type.toUpperCase()}: ${preview}`;
       });
       return `🧠 Found ${results.length} item(s) for "${parsed.query}":\n\n${lines.join('\n\n')}`;
     }
 
     if (parsed.action === 'list_vault') {
-      const items = listRecent(5);
+      const items = listRecent(8);
       if (!items || items.length === 0) {
         return '🔒 Your vault is currently empty.';
       }
       const lines = items.map(item => {
         const preview = item.is_secret ? '[🔐 Secret]' : item.content.slice(0, 60);
-        return `[#${item.id}] ${item.type.toUpperCase()} — ${preview}`;
+        const icon = item.type === 'image' ? '📸' : item.type === 'secret' ? '🔐' : '📝';
+        return `[#${item.id}] ${icon} ${item.type.toUpperCase()} — ${preview}`;
       });
       return `📦 Recent items in your vault:\n\n${lines.join('\n')}`;
     }
@@ -115,6 +156,22 @@ export async function processWithGemini(userText) {
     if (parsed.action === 'get_item' && parsed.id) {
       const item = getById(parsed.id);
       if (!item) return `❌ No item found with ID #${parsed.id}.`;
+
+      // If it's media, send the file directly!
+      if (item.type === 'image' || item.type === 'document' || item.type === 'file' || item.media_id) {
+        if (from) {
+          await sendMediaMessage(from, {
+            type: item.type === 'document' ? 'document' : 'image',
+            filePath: item.file_path,
+            mediaId: item.media_id,
+            mimeType: item.mime_type || 'image/jpeg',
+            caption: item.content || `Vault item #${item.id}`,
+          });
+          return `📸 Sent your ${item.type} (ID #${item.id}) to WhatsApp!`;
+        }
+        return `📸 Item #${item.id} is an ${item.type}: "${item.content}".`;
+      }
+
       const content = item.is_secret ? decrypt(item.content) : item.content;
       return `🔑 Item #${item.id} (${item.type}):\n${content}`;
     }

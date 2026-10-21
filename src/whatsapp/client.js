@@ -11,6 +11,8 @@ export function setActivePhoneNumberId(id) {
   }
 }
 
+export { downloadAndSaveMedia, uploadMedia, sendMediaMessage } from './media.js';
+
 export function getActivePhoneNumberId() {
   return activePhoneNumberId || config.phoneNumberId;
 }

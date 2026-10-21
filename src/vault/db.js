@@ -60,7 +60,7 @@ class JsonDatabaseFallback {
     // 1. INSERT INTO items ...
     if (s.startsWith('insert into items')) {
       return {
-        run: (type, content, tags, embedding, media_id, mime_type, is_secret) => {
+        run: (type, content, tags, embedding, media_id, mime_type, file_path, is_secret) => {
           const item = {
             id: self.nextId++,
             type,
@@ -69,6 +69,7 @@ class JsonDatabaseFallback {
             embedding: embedding ? (typeof embedding === 'string' ? embedding : JSON.stringify(embedding)) : null,
             media_id,
             mime_type,
+            file_path: file_path || null,
             is_secret: is_secret ? 1 : 0,
             created_at: new Date().toISOString(),
           };
@@ -93,6 +94,9 @@ class JsonDatabaseFallback {
               content: i.content,
               tags: i.tags,
               is_secret: i.is_secret,
+              media_id: i.media_id,
+              mime_type: i.mime_type,
+              file_path: i.file_path,
               created_at: i.created_at,
             }));
         },
@@ -196,12 +200,18 @@ export function initDB() {
           embedding   TEXT,
           media_id    TEXT,
           mime_type   TEXT,
+          file_path   TEXT,
           created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
           is_secret   INTEGER DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_created ON items(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_type ON items(type);
       `);
+      try {
+        db.exec(`ALTER TABLE items ADD COLUMN file_path TEXT;`);
+      } catch (alterErr) {
+        // column already exists
+      }
       console.log(`📦 Vault DB initialized with SQLite at ${DB_PATH}`);
       return;
     } catch (err) {

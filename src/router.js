@@ -5,6 +5,7 @@ import { semanticSearch, getEmbedding, keywordSearch } from './vault/search.js';
 import { encrypt, decrypt } from './vault/crypto.js';
 import { config } from './config.js';
 import { processWithGemini } from './agent/brain.js';
+import { sendMediaMessage } from './whatsapp/media.js';
 
 const ICONS = { note: '📝', link: '🔗', secret: '🔐', file: '📎' };
 
@@ -20,7 +21,7 @@ export async function dispatch(from, message) {
 
   // ── Gemini AI Natural Language Processing ────────────────────────────────
   if (config.geminiApiKey && trimmed && msgType === 'text') {
-    const aiResponse = await processWithGemini(trimmed);
+    const aiResponse = await processWithGemini(trimmed, from);
     if (aiResponse) {
       return sendMessage(from, aiResponse);
     }
@@ -47,28 +48,49 @@ export async function dispatch(from, message) {
     return sendMessage(from, `🗑️ Deleted item #${id}`);
   }
 
-  // ── get <id> (reveal secret or any item) ─────────────────────────────────
-  const getMatch = trimmed.match(/^get\s+(\d+)$/i);
+  // ── get <id> (reveal secret or send media file) ───────────────────────────
+  const getMatch =
+    trimmed.match(/^get\s+(\d+)$/i) ||
+    trimmed.match(/^(?:show|send)\s+(?:me\s+)?(?:photo|image|item)?\s*#?(\d+)$/i);
   if (getMatch) {
     const id = parseInt(getMatch[1], 10);
     const item = getById(id);
-    if (!item) return sendMessage(from, `❌ No item with ID ${id}`);
+    if (!item) return sendMessage(from, `❌ No item with ID #${id}`);
+
+    // If it is an image, document, or has a media_id, send the actual file!
+    if (item.type === 'image' || item.type === 'document' || item.type === 'file' || item.media_id) {
+      await sendMessage(from, `📸 Sending your ${item.type} (ID #${id}) ...`);
+      await sendMediaMessage(from, {
+        type: item.type === 'document' ? 'document' : 'image',
+        filePath: item.file_path,
+        mediaId: item.media_id,
+        mimeType: item.mime_type || 'image/jpeg',
+        caption: item.content || `Vault item #${id}`,
+      });
+      return;
+    }
+
     const content = item.is_secret ? decrypt(item.content) : item.content;
     return sendMessage(from, `🔑 #${id} (${item.type}):\n${content}`);
   }
 
   // ── media / file attachment ───────────────────────────────────────────────
   if (msgType !== 'text' && mediaId) {
+    const isImage = msgType === 'image';
+    const defaultCaption = isImage ? 'Uploaded photo' : `File (${mimeType})`;
     const id = save({
-      type: 'file',
-      content: caption || `File (${mimeType})`,
-      tags: [],
+      type: msgType,
+      content: caption || defaultCaption,
+      tags: isImage ? ['image', 'photo', 'picture'] : [msgType, 'file'],
       mediaId,
       mimeType,
+      filePath: message.filePath || null,
     });
     return sendMessage(
       from,
-      `📎 File saved! ID: #${id}\nType: ${mimeType}${caption ? `\nCaption: ${caption}` : ''}`
+      isImage
+        ? `📸 Photo securely saved to your vault! ID: #${id}${caption ? `\nCaption: "${caption}"` : ''}\n\nAsk me anytime: "send photo #${id}" to get it back!`
+        : `📎 File saved to your vault! ID: #${id}\nType: ${mimeType}${caption ? `\nCaption: ${caption}` : ''}`
     );
   }
 

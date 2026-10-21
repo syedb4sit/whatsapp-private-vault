@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { config } from '../config.js';
 import { dispatch } from '../router.js';
+import { downloadAndSaveMedia } from './media.js';
 
 const BASE_URL = 'https://api.whatsapp.com/agent/v1';
 
@@ -103,17 +104,33 @@ export async function startAgentPoller() {
               messagePayload.text = msg.text?.body || '';
             } else if (msg.type === 'image') {
               messagePayload.mediaId = msg.image?.id;
-              messagePayload.mimeType = msg.image?.mime_type;
+              messagePayload.mimeType = msg.image?.mime_type || 'image/jpeg';
               messagePayload.caption = msg.image?.caption;
             } else if (msg.type === 'document') {
               messagePayload.mediaId = msg.document?.id;
-              messagePayload.mimeType = msg.document?.mime_type;
+              messagePayload.mimeType = msg.document?.mime_type || 'application/octet-stream';
               messagePayload.caption = msg.document?.caption || msg.document?.filename;
             } else if (msg.type === 'audio') {
               messagePayload.mediaId = msg.audio?.id;
-              messagePayload.mimeType = msg.audio?.mime_type;
+              messagePayload.mimeType = msg.audio?.mime_type || 'audio/ogg';
             } else {
               continue; // Reactions or unhandled types
+            }
+
+            // Automatically download and save incoming media files to local storage
+            if (messagePayload.mediaId) {
+              try {
+                const downloaded = await downloadAndSaveMedia(
+                  messagePayload.mediaId,
+                  messagePayload.mimeType
+                );
+                if (downloaded) {
+                  messagePayload.filePath = downloaded.filePath;
+                  messagePayload.fileName = downloaded.fileName;
+                }
+              } catch (dlErr) {
+                console.error('Error downloading media on inbound:', dlErr.message);
+              }
             }
 
             try {

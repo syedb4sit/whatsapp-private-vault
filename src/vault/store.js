@@ -1,10 +1,19 @@
 import { getDB } from './db.js';
 
-export function save({ type, content, tags = [], embedding = null, mediaId = null, mimeType = null, isSecret = false }) {
+export function save({
+  type,
+  content,
+  tags = [],
+  embedding = null,
+  mediaId = null,
+  mimeType = null,
+  filePath = null,
+  isSecret = false,
+}) {
   const db = getDB();
   const stmt = db.prepare(
-    `INSERT INTO items (type, content, tags, embedding, media_id, mime_type, is_secret)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO items (type, content, tags, embedding, media_id, mime_type, file_path, is_secret)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const result = stmt.run(
     type,
@@ -13,6 +22,7 @@ export function save({ type, content, tags = [], embedding = null, mediaId = nul
     embedding ? JSON.stringify(embedding) : null,
     mediaId,
     mimeType,
+    filePath,
     isSecret ? 1 : 0
   );
   return result.lastInsertRowid;
@@ -22,7 +32,7 @@ export function listRecent(limit = 10) {
   const db = getDB();
   return db
     .prepare(
-      `SELECT id, type, content, tags, is_secret, created_at
+      `SELECT id, type, content, tags, is_secret, media_id, mime_type, file_path, created_at
        FROM items ORDER BY created_at DESC LIMIT ?`
     )
     .all(limit);
