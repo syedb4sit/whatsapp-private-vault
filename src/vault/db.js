@@ -1,10 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { restoreFromCloud, scheduleCloudBackup } from './cloudSync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, '../../vault.db');
-const JSON_PATH = path.join(__dirname, '../../vault.json');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../');
+if (!fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {}
+}
+const DB_PATH = path.join(DATA_DIR, 'vault.db');
+const JSON_PATH = path.join(DATA_DIR, 'vault.json');
 
 let db;
 let DatabaseSyncClass = null;
@@ -60,6 +67,7 @@ class JsonDatabaseFallback {
         JSON.stringify({ items: this.items, reminders: this.reminders }, null, 2),
         'utf8'
       );
+      scheduleCloudBackup(this.filePath);
     } catch (e) {
       console.error('Failed to save vault.json:', e);
     }
@@ -299,6 +307,101 @@ export function getDB() {
 /**
  * Initialize SQLite database with automatic fallback to persistent JSON store.
  */
+
+/**
+ * Export SQLite tables to JSON snapshot and trigger cloud backup.
+ */
+/**
+ * Export SQLite tables to JSON snapshot and trigger cloud backup.
+ */
+export function syncSqliteToJson() {
+  if (!db || !DatabaseSyncClass || !(db instanceof DatabaseSyncClass)) return;
+  try {
+    const items = db.prepare('SELECT * FROM items').all();
+    const reminders = db.prepare('SELECT * FROM reminders').all();
+    fs.writeFileSync(
+      JSON_PATH,
+      JSON.stringify({ items, reminders }, null, 2),
+      'utf8'
+    );
+    scheduleCloudBackup(JSON_PATH);
+  } catch (err) {
+    // Non-critical, ignore
+  }
+}
+
+/**
+ * Seed SQLite database from restored JSON snapshot if tables are empty.
+ */
+export function seedSqliteFromJson() {
+  if (!db || !DatabaseSyncClass || !(db instanceof DatabaseSyncClass)) return;
+  if (!fs.existsSync(JSON_PATH)) return;
+
+  try {
+    const raw = fs.readFileSync(JSON_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const items = parsed.items || (Array.isArray(parsed) ? parsed : []);
+    const reminders = parsed.reminders || [];
+
+    const currentCount = db.prepare('SELECT COUNT(*) as count FROM items').get()?.count || 0;
+    if (currentCount === 0 && items.length > 0) {
+      console.log(`📥 Restoring ${items.length} items from JSON/cloud into SQLite...`);
+      const insertItem = db.prepare(`
+        INSERT INTO items (id, type, content, tags, embedding, media_id, mime_type, file_path, created_at, is_secret)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const i of items) {
+        insertItem.run(
+          i.id,
+          i.type || 'note',
+          i.content || '',
+          typeof i.tags === 'string' ? i.tags : JSON.stringify(i.tags || []),
+          i.embedding ? (typeof i.embedding === 'string' ? i.embedding : JSON.stringify(i.embedding)) : null,
+          i.media_id || null,
+          i.mime_type || null,
+          i.file_path || null,
+          i.created_at || new Date().toISOString(),
+          i.is_secret ? 1 : 0
+        );
+      }
+    }
+
+    const currentRemCount = db.prepare('SELECT COUNT(*) as count FROM reminders').get()?.count || 0;
+    if (currentRemCount === 0 && reminders.length > 0) {
+      console.log(`📥 Restoring ${reminders.length} reminders from JSON/cloud into SQLite...`);
+      const insertRem = db.prepare(`
+        INSERT INTO reminders (id, user_id, content, due_at, created_at, sent_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      for (const r of reminders) {
+        insertRem.run(
+          r.id,
+          r.user_id || 'default_user',
+          r.content || '',
+          r.due_at,
+          r.created_at || new Date().toISOString(),
+          r.sent_at || null
+        );
+      }
+    }
+  } catch (migErr) {
+    console.warn('⚠️ SQLite JSON restore seeding note:', migErr.message);
+  }
+}
+
+/**
+ * Restore cloud backup if credentials are configured.
+ */
+export async function initCloudSync() {
+  const restored = await restoreFromCloud(JSON_PATH);
+  if (restored) {
+    seedSqliteFromJson();
+  }
+}
+
+/**
+ * Initialize SQLite database with automatic fallback to persistent JSON store.
+ */
 export function initDB() {
   if (DatabaseSyncClass) {
     try {
@@ -336,8 +439,11 @@ export function initDB() {
         // column already exists
       }
 
+      // Check if local JSON exists and seed if empty
+      seedSqliteFromJson();
+
       console.log(`📦 Vault DB initialized with SQLite at ${DB_PATH} (Items & Reminders active)`);
-      return;
+      return db;
     } catch (err) {
       console.warn('SQLite init error, switching to JSON storage fallback:', err.message);
     }
@@ -346,4 +452,5 @@ export function initDB() {
   // Graceful fallback if SQLite is not available or experimental flag is omitted
   db = new JsonDatabaseFallback(JSON_PATH);
   console.log(`📦 Vault DB initialized with JSON storage at ${JSON_PATH} (Items & Reminders active)`);
+  return db;
 }

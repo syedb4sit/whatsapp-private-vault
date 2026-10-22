@@ -1,6 +1,6 @@
 import express from 'express';
 import { config } from './config.js';
-import { initDB } from './vault/db.js';
+import { initDB, initCloudSync } from './vault/db.js';
 import { getCount, listRecent, getReminderCount, listUpcomingReminders } from './vault/store.js';
 import { handleInbound } from './whatsapp/handler.js';
 import { dispatch } from './router.js';
@@ -185,8 +185,29 @@ app.get('/health', async (req, res) => {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 initDB();
+await initCloudSync();
 startAgentPoller();
 startReminderScheduler();
-app.listen(config.port, () =>
+
+const server = app.listen(config.port, () =>
   console.log(`🔒 Vault server running on port ${config.port}`)
 );
+
+// ── Self Keep-Alive Pinger (Prevents Render Free Tier Cold Sleep) ───────────
+const publicUrl =
+  process.env.RENDER_EXTERNAL_URL ||
+  (process.env.NODE_ENV === 'production'
+    ? 'https://whatsapp-private-vault.onrender.com'
+    : null);
+
+if (publicUrl) {
+  console.log(`⏱️ Keep-Alive pinger active for ${publicUrl} (every 10 minutes)`);
+  setInterval(async () => {
+    try {
+      await fetch(`${publicUrl}/health`);
+      console.log('💓 Keep-Alive ping dispatched.');
+    } catch (e) {
+      // transient network blip
+    }
+  }, 10 * 60 * 1000);
+}

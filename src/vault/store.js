@@ -1,4 +1,4 @@
-import { getDB } from './db.js';
+import { getDB, syncSqliteToJson } from './db.js';
 
 // ── VAULT ITEMS ─────────────────────────────────────────────────────────────
 
@@ -27,6 +27,7 @@ export function save({
     filePath,
     isSecret ? 1 : 0
   );
+  syncSqliteToJson();
   return result.lastInsertRowid;
 }
 
@@ -47,7 +48,9 @@ export function getById(id) {
 
 export function deleteItem(id) {
   const db = getDB();
-  return db.prepare(`DELETE FROM items WHERE id = ?`).run(id);
+  const res = db.prepare(`DELETE FROM items WHERE id = ?`).run(id);
+  syncSqliteToJson();
+  return res;
 }
 
 export function getAllWithEmbeddings() {
@@ -73,6 +76,7 @@ export function saveReminder({ userId, content, dueAt }) {
     `INSERT INTO reminders (user_id, content, due_at) VALUES (?, ?, ?)`
   );
   const result = stmt.run(userId, content, dueAt);
+  syncSqliteToJson();
   return result.lastInsertRowid;
 }
 
@@ -88,9 +92,11 @@ export function getDueReminders(nowIso = new Date().toISOString()) {
 
 export function markReminderSent(id, sentAt = new Date().toISOString()) {
   const db = getDB();
-  return db
+  const res = db
     .prepare(`UPDATE reminders SET sent_at = ? WHERE id = ?`)
     .run(sentAt, id);
+  syncSqliteToJson();
+  return res;
 }
 
 export function listUpcomingReminders(userId) {
@@ -113,17 +119,23 @@ export function listUpcomingReminders(userId) {
 
 export function deleteReminder(id) {
   const db = getDB();
-  return db.prepare(`DELETE FROM reminders WHERE id = ?`).run(id);
+  const res = db.prepare(`DELETE FROM reminders WHERE id = ?`).run(id);
+  syncSqliteToJson();
+  return res;
 }
 
 export function deleteAllReminders(userId) {
   const db = getDB();
+  let changes = 0;
   if (userId && userId !== '*') {
     const res = db.prepare(`DELETE FROM reminders WHERE sent_at IS NULL AND user_id = ?`).run(userId);
-    return res?.changes || 0;
+    changes = res?.changes || 0;
+  } else {
+    const res = db.prepare(`DELETE FROM reminders WHERE sent_at IS NULL`).run();
+    changes = res?.changes || 0;
   }
-  const res = db.prepare(`DELETE FROM reminders WHERE sent_at IS NULL`).run();
-  return res?.changes || 0;
+  syncSqliteToJson();
+  return changes;
 }
 
 export function getReminderById(id) {

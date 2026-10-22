@@ -12,9 +12,10 @@ function getGenAI() {
 }
 
 const TRANSCRIBE_MODELS = [
-  'gemini-flash-latest',
-  'gemini-3.5-flash',
+  'gemini-flash-lite-latest',
+  'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
+  'gemini-flash-latest',
 ];
 
 /**
@@ -56,7 +57,9 @@ export async function transcribeAudio(filePath, mimeType = 'audio/ogg') {
     for (const modelName of TRANSCRIBE_MODELS) {
       try {
         const model = client.getGenerativeModel({ model: modelName }, { apiVersion: 'v1beta' });
-        const res = await model.generateContent([
+        
+        // Enforce 15-second timeout per model so it never stalls indefinitely
+        const transcriptionPromise = model.generateContent([
           {
             inlineData: {
               mimeType: cleanMime,
@@ -66,6 +69,11 @@ export async function transcribeAudio(filePath, mimeType = 'audio/ogg') {
           'Transcribe the exact spoken words in this audio recording. Output ONLY the raw transcription without commentary or formatting. If the speaker uses English, Urdu, or mixed language, transcribe faithfully.',
         ]);
 
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Transcription timed out after 15s')), 15000)
+        );
+
+        const res = await Promise.race([transcriptionPromise, timeoutPromise]);
         const text = res.response.text().trim();
         if (text) {
           console.log(`🎙️ [Audio Transcribed with ${modelName}]: "${text}"`);
