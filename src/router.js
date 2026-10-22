@@ -15,19 +15,58 @@ import { semanticSearch, getEmbedding, keywordSearch } from './vault/search.js';
 import { encrypt, decrypt } from './vault/crypto.js';
 import { config } from './config.js';
 import { processWithGemini } from './agent/brain.js';
-import { sendMediaMessage } from './whatsapp/media.js';
+import { sendMediaMessage, downloadAndSaveMedia } from './whatsapp/media.js';
+import { transcribeAudio } from './whatsapp/transcriber.js';
 
 /**
  * Main dispatcher — routes an inbound WhatsApp message to the correct vault action.
  *
  * @param {string} from     Sender phone number or user identifier
- * @param {{ type: string, text?: string, mediaId?: string, mimeType?: string, caption?: string }} message
+ * @param {{ type: string, text?: string, mediaId?: string, mimeType?: string, caption?: string, filePath?: string }} message
  */
 export async function dispatch(from, message) {
   const { type: msgType, text, mediaId, mimeType, caption } = message;
   const trimmed = (text || '').trim();
 
-  // ── 1. Gemini AI Natural Language Processing (Primary) ───────────────────
+  // ── 1. Voice Note / Audio Processing ─────────────────────────────────────
+  if (msgType === 'audio' && (message.filePath || mediaId)) {
+    let audioPath = message.filePath;
+    if (!audioPath && mediaId) {
+      const dl = await downloadAndSaveMedia(mediaId, mimeType || 'audio/ogg');
+      if (dl) audioPath = dl.filePath;
+    }
+
+    if (audioPath) {
+      console.log(`🎙️ [Router] Transcribing incoming voice note from ${from}...`);
+      const transcription = await transcribeAudio(audioPath, mimeType || 'audio/ogg');
+
+      if (transcription) {
+        console.log(`🎙️ [Router] Voice Note Transcribed: "${transcription}"`);
+
+        // Save voice note with transcription to vault for searchability
+        save({
+          type: 'voice_note',
+          content: transcription,
+          tags: ['voice_note', 'audio'],
+          mediaId,
+          mimeType: mimeType || 'audio/ogg',
+          filePath: audioPath,
+        });
+
+        // Run transcribed speech through assistant reasoning engine
+        if (config.geminiApiKey) {
+          const aiResponse = await processWithGemini(transcription, from);
+          if (aiResponse) {
+            return sendMessage(from, `🎤 _"${transcription}"_\n\n${aiResponse}`);
+          }
+        }
+
+        return sendMessage(from, `🎤 _"${transcription}"_\n\nUnderstood and saved to your vault, Mr. Basit.`);
+      }
+    }
+  }
+
+  // ── 2. Gemini AI Natural Language Processing (Primary Text) ──────────────
   if (config.geminiApiKey && trimmed && msgType === 'text') {
     const aiResponse = await processWithGemini(trimmed, from);
     if (aiResponse) {
@@ -35,13 +74,13 @@ export async function dispatch(from, message) {
     }
   }
 
-  // ── 2. Fallback Manual Commands ──────────────────────────────────────────
+  // ── 3. Fallback Manual Commands ──────────────────────────────────────────
 
   // list reminders / reminders
   if (trimmed.toLowerCase() === 'reminders' || trimmed.toLowerCase() === 'list reminders') {
     const reminders = listUpcomingReminders(from);
     if (!reminders || reminders.length === 0) {
-      return sendMessage(from, 'Your schedule is clear right now, sir.');
+      return sendMessage(from, 'Your schedule is clear right now, Mr. Basit.');
     }
     const lines = reminders.map(r => {
       let timeStr = '';
@@ -63,7 +102,7 @@ export async function dispatch(from, message) {
     });
     return sendMessage(
       from,
-      `Here is your upcoming schedule, sir:\n\n${lines.join('\n')}`
+      `Here is your upcoming schedule, Mr. Basit:\n\n${lines.join('\n')}`
     );
   }
 
@@ -71,9 +110,9 @@ export async function dispatch(from, message) {
   if (trimmed.toLowerCase() === 'cancel all reminders' || trimmed.toLowerCase() === 'delete all reminders') {
     const count = deleteAllReminders(from);
     if (count === 0) {
-      return sendMessage(from, 'Your schedule was already clear, sir.');
+      return sendMessage(from, 'Your schedule was already clear, Mr. Basit.');
     }
-    return sendMessage(from, 'All upcoming reminders have been cleared, sir.');
+    return sendMessage(from, 'All upcoming reminders have been cleared, Mr. Basit.');
   }
 
   // cancel reminder <id> / delete reminder <id> OR cancel <topic> reminder
@@ -87,10 +126,10 @@ export async function dispatch(from, message) {
     if (!isNaN(id)) {
       const existing = getReminderById(id);
       if (!existing) {
-        return sendMessage(from, 'I could not find that reminder, sir.');
+        return sendMessage(from, 'I could not find that reminder, Mr. Basit.');
       }
       deleteReminder(id);
-      return sendMessage(from, `Cancelled your reminder for "${existing.content}", sir.`);
+      return sendMessage(from, `Cancelled your reminder for "${existing.content}", Mr. Basit.`);
     }
 
     // Keyword/topic based cancel
@@ -100,10 +139,10 @@ export async function dispatch(from, message) {
 
     if (match) {
       deleteReminder(match.id);
-      return sendMessage(from, `Cancelled your reminder for "${match.content}", sir.`);
+      return sendMessage(from, `Cancelled your reminder for "${match.content}", Mr. Basit.`);
     }
 
-    return sendMessage(from, `I couldn't find a reminder matching "${targetQuery}", sir.`);
+    return sendMessage(from, `I couldn't find a reminder matching "${targetQuery}", Mr. Basit.`);
   }
 
   // remind me in <X> (min|mins|minutes|hours) to <task> (Fallback parser)
@@ -132,21 +171,21 @@ export async function dispatch(from, message) {
 
     return sendMessage(
       from,
-      `Noted, sir. I'll remind you about "${task}" at ${displayTime}. ⏰`
+      `Noted, Mr. Basit. I'll remind you about "${task}" at ${displayTime}. ⏰`
     );
   }
 
   // list (vault items)
   if (trimmed.toLowerCase() === 'list') {
     const items = listRecent(10);
-    if (!items.length) return sendMessage(from, 'Your vault is currently empty, sir.');
+    if (!items.length) return sendMessage(from, 'Your vault is currently empty, Mr. Basit.');
     const lines = items.map(item => {
       const preview = item.is_secret ? '[Encrypted Secret]' : item.content.slice(0, 70);
       return `• ${preview}`;
     });
     return sendMessage(
       from,
-      `Here are your recent vault notes, sir:\n\n${lines.join('\n')}`
+      `Here are your recent vault notes, Mr. Basit:\n\n${lines.join('\n')}`
     );
   }
 
@@ -155,9 +194,9 @@ export async function dispatch(from, message) {
   if (deleteMatch) {
     const id = parseInt(deleteMatch[1], 10);
     const item = getById(id);
-    if (!item) return sendMessage(from, 'I could not find that entry, sir.');
+    if (!item) return sendMessage(from, 'I could not find that entry, Mr. Basit.');
     deleteItem(id);
-    return sendMessage(from, 'Removed from your vault, sir.');
+    return sendMessage(from, 'Removed from your vault, Mr. Basit.');
   }
 
   // get <id> (reveal secret or send media file)
@@ -167,10 +206,10 @@ export async function dispatch(from, message) {
   if (getMatch) {
     const id = parseInt(getMatch[1], 10);
     const item = getById(id);
-    if (!item) return sendMessage(from, 'I could not find that entry, sir.');
+    if (!item) return sendMessage(from, 'I could not find that entry, Mr. Basit.');
 
     if (item.type === 'image' || item.type === 'document' || item.type === 'file' || item.media_id) {
-      await sendMessage(from, `Sending your ${item.type} now, sir.`);
+      await sendMessage(from, `Sending your ${item.type} now, Mr. Basit.`);
       await sendMediaMessage(from, {
         type: item.type === 'document' ? 'document' : 'image',
         filePath: item.file_path,
@@ -185,7 +224,7 @@ export async function dispatch(from, message) {
     return sendMessage(from, `${content}`);
   }
 
-  // media / file attachment
+  // media / file attachment (non-audio)
   if (msgType !== 'text' && mediaId) {
     const isImage = msgType === 'image';
     const defaultCaption = isImage ? 'Photograph' : `Document (${mimeType})`;
@@ -200,8 +239,8 @@ export async function dispatch(from, message) {
     return sendMessage(
       from,
       isImage
-        ? `Your photograph has been saved to the vault, sir.${caption ? `\n_${caption}_` : ''}`
-        : `Your document has been saved to the vault, sir.${caption ? `\n_${caption}_` : ''}`
+        ? `Your photograph has been saved to the vault, Mr. Basit.${caption ? `\n_${caption}_` : ''}`
+        : `Your document has been saved to the vault, Mr. Basit.${caption ? `\n_${caption}_` : ''}`
     );
   }
 
@@ -246,7 +285,7 @@ export async function dispatch(from, message) {
       });
       return sendMessage(
         from,
-        `Here is what I found for "${cleanQuery}", sir:\n\n${lines.join('\n')}`
+        `Here is what I found for "${cleanQuery}", Mr. Basit:\n\n${lines.join('\n')}`
       );
     }
 
@@ -258,11 +297,11 @@ export async function dispatch(from, message) {
       });
       return sendMessage(
         from,
-        `Here is what I found for "${cleanQuery}", sir:\n\n${lines.join('\n')}`
+        `Here is what I found for "${cleanQuery}", Mr. Basit:\n\n${lines.join('\n')}`
       );
     }
 
-    return sendMessage(from, `I couldn't find anything matching "${cleanQuery}" in your vault, sir.`);
+    return sendMessage(from, `I couldn't find anything matching "${cleanQuery}" in your vault, Mr. Basit.`);
   }
 
   // store item
@@ -285,5 +324,5 @@ export async function dispatch(from, message) {
 
   save({ type, content: storedContent, tags, embedding, isSecret });
 
-  return sendMessage(from, isSecret ? 'Stored and encrypted securely in your vault, sir.' : 'Saved to your vault, sir.');
+  return sendMessage(from, isSecret ? 'Stored and encrypted securely in your vault, Mr. Basit.' : 'Saved to your vault, Mr. Basit.');
 }
