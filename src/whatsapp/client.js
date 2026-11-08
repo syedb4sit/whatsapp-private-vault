@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { config } from '../config.js';
+import { clientStatus } from '../utils/status.js';
 
 const AGENT_BASE_URL = 'https://api.whatsapp.com/agent/v1';
 let activePhoneNumberId = config.phoneNumberId;
@@ -29,6 +30,9 @@ export async function sendMessage(to, text) {
   const token = config.whatsappToken;
 
   if (!token || token.includes('your_token')) {
+    clientStatus.lastSentAt = new Date().toISOString();
+    clientStatus.lastRecipient = to;
+    clientStatus.lastStatus = 'simulated';
     console.log(`\n💬 [WhatsApp Simulation -> ${to}]:`);
     console.log(`   ${text.replace(/\n/g, '\n   ')}\n`);
     return { status: 'simulated', to, text };
@@ -52,10 +56,17 @@ export async function sendMessage(to, text) {
         timeout: 15000,
       }
     );
+    clientStatus.totalSent++;
+    clientStatus.lastSentAt = new Date().toISOString();
+    clientStatus.lastRecipient = to;
+    clientStatus.lastStatus = 'success';
+    clientStatus.lastError = null;
     console.log(`🚀 [Agent API] Successfully sent WhatsApp reply to ${to}! (wamid: ${res.data?.messages?.[0]?.id || 'ok'})`);
     return res.data;
   } catch (agentErr) {
     const agentErrData = agentErr.response?.data;
+    clientStatus.lastStatus = 'error';
+    clientStatus.lastError = agentErrData || agentErr.message;
     console.warn(`⚠️ Agent Platform send status ${agentErr.response?.status || 'error'}:`, agentErrData || agentErr.message);
 
     // 2. Fallback to Meta Cloud API if a Phone Number ID is present

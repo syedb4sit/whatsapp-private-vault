@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { dispatch } from '../router.js';
 import { setActivePhoneNumberId } from './client.js';
+import { webhookStatus } from '../utils/status.js';
 
 /**
  * Parse a raw WhatsApp Cloud API webhook payload or custom agent payload,
@@ -13,6 +14,10 @@ export async function handleInbound(body) {
   if (body && (body.text || body.message) && (body.from || body.sender)) {
     const from = String(body.from || body.sender);
     const text = String(body.text || body.message);
+    webhookStatus.totalReceived++;
+    webhookStatus.lastReceivedAt = new Date().toISOString();
+    webhookStatus.lastSender = from;
+    webhookStatus.lastSnippet = text.slice(0, 80);
     console.log(`📩 Inbound test/direct message from ${from}: "${text}"`);
     await dispatch(from, { type: 'text', text });
     return;
@@ -32,6 +37,10 @@ export async function handleInbound(body) {
 
   const msg = messages[0];
   const from = msg.from;
+  webhookStatus.totalReceived++;
+  webhookStatus.lastReceivedAt = new Date().toISOString();
+  webhookStatus.lastSender = from;
+  webhookStatus.lastSnippet = (msg.text?.body || msg.type || '').slice(0, 80);
 
   // Security: only enforce owner restriction if OWNER_PHONE is explicitly set and not '*'
   if (config.ownerPhone && config.ownerPhone !== '*' && from !== config.ownerPhone) {

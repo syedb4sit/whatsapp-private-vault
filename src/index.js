@@ -6,6 +6,10 @@ import { handleInbound } from './whatsapp/handler.js';
 import { dispatch } from './router.js';
 import { startAgentPoller } from './whatsapp/agentPoller.js';
 import { startReminderScheduler } from './agent/scheduler.js';
+import { initLogCapture, getRecentLogs, pollerStatus, clientStatus, webhookStatus } from './utils/status.js';
+
+// Start recording in-memory logs for diagnostics
+initLogCapture();
 
 const app = express();
 app.use(express.json());
@@ -24,6 +28,10 @@ app.get('/', (req, res) => {
     pendingReminders = listUpcomingReminders();
   } catch (e) {}
 
+  const hasToken = Boolean(config.whatsappToken && !config.whatsappToken.includes('your_token'));
+  const tokenMasked = hasToken ? (config.whatsappToken.slice(0, 10) + '...' + config.whatsappToken.slice(-6)) : 'None (Using Console Simulation)';
+  const recentLogsList = getRecentLogs(25);
+
   res.send(`
 <!DOCTYPE html>
 <html lang="en">
@@ -32,26 +40,34 @@ app.get('/', (req, res) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>🔒 WhatsApp Private Vault & Proactive Agent</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 800px; margin: 0 auto; line-height: 1.5; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 850px; margin: 0 auto; line-height: 1.5; }
     .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid #334155; }
     h1 { color: #38bdf8; margin-top: 0; }
     .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.85rem; font-weight: 600; background: #059669; color: white; }
+    .badge-warn { background: #d97706; }
+    .badge-err { background: #dc2626; }
     .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     .stat { font-size: 2.2rem; font-weight: bold; color: #38bdf8; margin: 0.5rem 0; }
     input, button { padding: 0.75rem; border-radius: 8px; border: 1px solid #475569; font-size: 1rem; }
     input { background: #0f172a; color: white; width: 70%; }
     button { background: #2563eb; color: white; font-weight: bold; cursor: pointer; border: none; margin-left: 0.5rem; }
     button:hover { background: #1d4ed8; }
-    pre { background: #090d16; padding: 1rem; border-radius: 8px; overflow-x: auto; color: #a5f3fc; }
+    pre { background: #090d16; padding: 1rem; border-radius: 8px; overflow-x: auto; color: #a5f3fc; font-size: 0.85rem; line-height: 1.4; }
     ul { list-style: none; padding: 0; }
     li { background: #0f172a; padding: 0.75rem; margin-bottom: 0.5rem; border-radius: 6px; font-family: monospace; }
+    .status-row { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #334155; }
   </style>
 </head>
 <body>
   <h1>🔒 WhatsApp Private Vault & Proactive Agent</h1>
   <div class="card">
-    <span class="badge">Online & Proactive</span>
-    <div class="stats-grid">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span class="badge">Online & Proactive</span>
+      <span class="badge ${pollerStatus.state === 'auth_error' ? 'badge-err' : (pollerStatus.state === 'polling' || pollerStatus.state === 'connected' ? '' : 'badge-warn')}">
+        Agent Poller: ${pollerStatus.state.toUpperCase()}
+      </span>
+    </div>
+    <div class="stats-grid" style="margin-top:1rem;">
       <div>
         <div class="stat">${count}</div>
         <div style="color: #94a3b8;">Total Items Stored</div>
@@ -64,10 +80,40 @@ app.get('/', (req, res) => {
   </div>
 
   <div class="card">
+    <h3>📡 WhatsApp Connection Diagnostics</h3>
+    <div class="status-row">
+      <span>WhatsApp Token:</span>
+      <code>${tokenMasked}</code>
+    </div>
+    <div class="status-row">
+      <span>Poller State:</span>
+      <strong>${pollerStatus.state} (HTTP ${pollerStatus.lastHttpStatus || 'N/A'})</strong>
+    </div>
+    <div class="status-row">
+      <span>Last Poll Timestamp:</span>
+      <span>${pollerStatus.lastPollAt || 'None'}</span>
+    </div>
+    <div class="status-row">
+      <span>Total Messages Received:</span>
+      <span>${pollerStatus.totalMessagesReceived + webhookStatus.totalReceived}</span>
+    </div>
+    <div class="status-row">
+      <span>Last Inbound Message:</span>
+      <span>${pollerStatus.lastMessageSnippet || webhookStatus.lastSnippet || 'None'}</span>
+    </div>
+    <div class="status-row">
+      <span>Last Outbound Reply:</span>
+      <span>${clientStatus.lastStatus ? clientStatus.lastStatus.toUpperCase() : 'None'} (${clientStatus.lastSentAt || 'None'})</span>
+    </div>
+    ${pollerStatus.lastError ? `<div style="margin-top:0.75rem; color:#f87171;"><strong>Last Poller Error:</strong> <pre>${JSON.stringify(pollerStatus.lastError, null, 2)}</pre></div>` : ''}
+    ${clientStatus.lastError ? `<div style="margin-top:0.75rem; color:#f87171;"><strong>Last Outbound Error:</strong> <pre>${JSON.stringify(clientStatus.lastError, null, 2)}</pre></div>` : ''}
+  </div>
+
+  <div class="card">
     <h3>🧪 Test Interactive Simulator</h3>
     <p style="color: #94a3b8; font-size: 0.9rem;">
-      Try reminders: <code>remind me in 10 minutes to take medicine</code>, <code>remind me at 5pm to call Ali</code>, <code>reminders</code><br>
-      Try notes/secrets: <code>secret: my pass 123</code>, <code>list</code>, <code>find pass</code>
+      Try reminders: <code>remind me in 10 minutes to take medicine</code>, <code>reminders</code><br>
+      Try notes/secrets: <code>secret: my pass 123</code>, <code>find pass</code>
     </p>
     <form id="simForm">
       <input type="text" id="simText" placeholder="Type a message or command..." required />
@@ -87,16 +133,11 @@ app.get('/', (req, res) => {
   </div>
 
   <div class="card">
-    <h3>📋 Recent Vault Items</h3>
-    <ul>
-      ${items.length === 0 ? '<li style="color:#64748b;">Vault is currently empty.</li>' : items.map(i => `<li>[#${i.id}] ${i.type.toUpperCase()} - ${i.is_secret ? '🔐 [Encrypted AES-256 Secret]' : (i.content || '').slice(0, 50)}</li>`).join('')}
-    </ul>
-  </div>
-
-  <div class="card">
-    <h3>🔗 Webhook Configuration</h3>
-    <p><strong>Callback URL:</strong> <code>https://${req.headers.host || 'your-service.onrender.com'}/webhook</code></p>
-    <p><strong>Verify Token:</strong> <code>${config.webhookVerifyToken}</code></p>
+    <h3>📜 Recent Server Logs (Live Diagnostics)</h3>
+    <pre style="max-height: 250px; overflow-y: auto;">${recentLogsList.join('\n') || 'No logs recorded yet.'}</pre>
+    <div style="margin-top: 0.5rem; text-align: right;">
+      <a href="/api/status" target="_blank" style="color: #38bdf8; font-size: 0.85rem;">View JSON Diagnostics (/api/status)</a>
+    </div>
   </div>
 
   <script>
@@ -172,12 +213,38 @@ app.post('/api/test', async (req, res) => {
   }
 });
 
+// ── Full System Diagnostics Endpoint ──────────────────────────────────────
+app.get('/api/status', (req, res) => {
+  const hasToken = Boolean(config.whatsappToken && !config.whatsappToken.includes('your_token'));
+  res.json({
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    tokenConfigured: hasToken,
+    tokenPrefix: hasToken ? config.whatsappToken.slice(0, 8) + '...' : 'none',
+    tokenLength: config.whatsappToken ? config.whatsappToken.length : 0,
+    geminiConfigured: Boolean(config.geminiApiKey),
+    poller: pollerStatus,
+    client: clientStatus,
+    webhook: webhookStatus,
+    items: getCount(),
+    reminders: getReminderCount(),
+    recentLogs: getRecentLogs(50),
+  });
+});
+
 // ── Health check ──────────────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
   try {
     const items = getCount();
     const reminders = getReminderCount();
-    res.json({ status: 'ok', items, reminders, nodeVersion: process.version });
+    res.json({
+      status: 'ok',
+      items,
+      reminders,
+      pollerState: pollerStatus.state,
+      tokenConfigured: Boolean(config.whatsappToken && !config.whatsappToken.includes('your_token')),
+      nodeVersion: process.version,
+    });
   } catch {
     res.json({ status: 'ok', items: 0, reminders: 0 });
   }
@@ -196,18 +263,16 @@ const server = app.listen(config.port, () =>
 // ── Self Keep-Alive Pinger (Prevents Render Free Tier Cold Sleep) ───────────
 const publicUrl =
   process.env.RENDER_EXTERNAL_URL ||
-  (process.env.NODE_ENV === 'production'
-    ? 'https://whatsapp-private-vault.onrender.com'
-    : null);
+  'https://whatsapp-private-vault.onrender.com';
 
 if (publicUrl) {
   console.log(`⏱️ Keep-Alive pinger active for ${publicUrl} (every 10 minutes)`);
   setInterval(async () => {
     try {
-      await fetch(`${publicUrl}/health`);
-      console.log('💓 Keep-Alive ping dispatched.');
+      const res = await fetch(`${publicUrl}/health`);
+      console.log(`💓 Keep-Alive ping dispatched (status ${res.status}).`);
     } catch (e) {
-      // transient network blip
+      console.warn('⚠️ Keep-Alive ping blip:', e.message);
     }
   }, 10 * 60 * 1000);
 }

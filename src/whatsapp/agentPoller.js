@@ -2,6 +2,7 @@ import axios from 'axios';
 import { config } from '../config.js';
 import { dispatch } from '../router.js';
 import { downloadAndSaveMedia } from './media.js';
+import { pollerStatus } from '../utils/status.js';
 
 const BASE_URL = 'https://api.whatsapp.com/agent/v1';
 
@@ -47,11 +48,14 @@ export async function startAgentPoller() {
   const token = config.whatsappToken;
   if (!token || token.includes('your_token')) {
     console.log('ℹ️  No WHATSAPP_TOKEN set; WhatsApp Agent Platform poller is idle.');
+    pollerStatus.state = 'no_token';
     return;
   }
 
   if (isPolling) return;
   isPolling = true;
+  pollerStatus.isStarted = true;
+  pollerStatus.state = 'polling';
 
   console.log('🤖 WhatsApp Agent Platform Poller started!');
   console.log('📡 Connecting to https://api.whatsapp.com/agent/v1/updates ...');
@@ -60,6 +64,9 @@ export async function startAgentPoller() {
   (async () => {
     while (isPolling) {
       try {
+        pollerStatus.totalPolls++;
+        pollerStatus.lastPollAt = new Date().toISOString();
+
         const params = {
           limit: 50,
           timeout: 15,
@@ -76,11 +83,16 @@ export async function startAgentPoller() {
           timeout: 25000, // 25s HTTP timeout for 15s server long-poll
         });
 
+        pollerStatus.lastHttpStatus = res.status;
+        pollerStatus.consecutiveErrors = 0;
+
         // HTTP 204 No Content means long-poll timeout elapsed with no new updates
         if (res.status === 204 || !res.data) {
+          pollerStatus.state = 'polling';
           continue;
         }
 
+        pollerStatus.state = 'connected';
         const data = res.data;
         if (data.next_offset !== undefined) {
           currentOffset = data.next_offset;
@@ -93,6 +105,11 @@ export async function startAgentPoller() {
           const messages = change.value?.messages || [];
           for (const msg of messages) {
             console.log(`📩 [WhatsApp Agent API] Inbound from ${msg.from}: ${msg.text?.body || msg.type}`);
+
+            pollerStatus.totalMessagesReceived++;
+            pollerStatus.lastMessageAt = new Date().toISOString();
+            pollerStatus.lastSender = msg.from;
+            pollerStatus.lastMessageSnippet = (msg.text?.body || msg.type || '').slice(0, 80);
 
             // Mark message read & send typing indicator
             if (msg.id) {
@@ -141,21 +158,29 @@ export async function startAgentPoller() {
           }
         }
       } catch (err) {
+        pollerStatus.consecutiveErrors++;
         if (err.response) {
           const status = err.response.status;
           const errData = err.response.data;
+          pollerStatus.lastHttpStatus = status;
+          pollerStatus.lastError = errData || err.message;
+
           if (status === 401 || status === 400) {
+            pollerStatus.state = 'auth_error';
             console.error(`❌ WhatsApp Agent API Auth Error (${status}):`, errData);
             // Wait 20 seconds before retry on authentication failure
             await new Promise((r) => setTimeout(r, 20000));
           } else if (status === 429) {
+            pollerStatus.state = 'rate_limited';
             console.warn('⚠️ WhatsApp Agent API rate limited (429), pausing 10s...');
             await new Promise((r) => setTimeout(r, 10000));
           } else {
+            pollerStatus.state = 'error';
             console.warn(`WhatsApp Agent API /updates status ${status}:`, errData);
             await new Promise((r) => setTimeout(r, 5000));
           }
         } else {
+          pollerStatus.lastError = err.message;
           // Socket hang up or network pause, normal during long-polling
           await new Promise((r) => setTimeout(r, 2000));
         }
