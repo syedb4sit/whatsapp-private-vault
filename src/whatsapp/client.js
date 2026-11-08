@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { config } from '../config.js';
 import { clientStatus } from '../utils/status.js';
+import { recordConversation } from '../vault/store.js';
 
 const AGENT_BASE_URL = 'https://api.whatsapp.com/agent/v1';
 let activePhoneNumberId = config.phoneNumberId;
@@ -27,6 +28,9 @@ export function getActivePhoneNumberId() {
  * @param {string} text  Message body
  */
 export async function sendMessage(to, text) {
+  if (to && text) {
+    recordConversation(to, 'assistant', text);
+  }
   const token = config.whatsappToken;
 
   if (!token || token.includes('your_token')) {

@@ -10,11 +10,15 @@ import {
   deleteReminder,
   deleteAllReminders,
   getReminderById,
+  saveMemory,
+  listMemories,
+  deleteMemory,
+  deleteAllMemories,
+  getRecentConversation,
 } from '../vault/store.js';
 import { keywordSearch } from '../vault/search.js';
 import { encrypt, decrypt } from '../vault/crypto.js';
 import { sendMediaMessage } from '../whatsapp/media.js';
-import { BASIT_PROFILE } from './profile.js';
 import { textToSpeech } from '../whatsapp/tts.js';
 
 let genAI = null;
@@ -33,8 +37,8 @@ const CANDIDATE_MODELS = [
 ];
 
 /**
- * Build dynamic system prompt with personal context for Basit,
- * understated personal assistant tone, live temporal grounding, and active reminders.
+ * Build dynamic system prompt with full personal context, accumulated long-term memories,
+ * multi-turn conversation history, live temporal grounding, and active reminders.
  *
  * @param {string} [from]
  */
@@ -53,6 +57,7 @@ function buildSystemPrompt(from) {
     hour12: true,
   });
 
+  // 1. Active reminders
   let pendingList = [];
   try {
     pendingList = listUpcomingReminders(from);
@@ -82,116 +87,182 @@ function buildSystemPrompt(from) {
           .join('\n')
       : '  None currently scheduled.';
 
+  // 2. Accumulated Long-Term Memories
+  let memoriesList = [];
+  try {
+    memoriesList = listMemories(from);
+  } catch (e) {}
+
+  const memoriesContext =
+    memoriesList.length > 0
+      ? memoriesList
+          .map(m => `  • [${(m.category || 'general').toUpperCase()}]: ${m.key} = "${m.value}"`)
+          .join('\n')
+      : '  No personal memories recorded yet.';
+
+  // 3. Multi-turn recent conversation turns
+  let convHistory = [];
+  try {
+    convHistory = getRecentConversation(from, 8);
+  } catch (e) {}
+
+  const historyContext =
+    convHistory.length > 0
+      ? convHistory
+          .map(c => `  [${c.role === 'user' ? 'Mr. Basit' : 'Butler'}]: ${c.content}`)
+          .join('\n')
+      : '  (Starting fresh dialogue)';
+
   return `
-You are the personal assistant and memory vault manager on WhatsApp for your master, Mr. Basit.
-Think of a classic, understated British personal assistant (like Jarvis or a modern, poised Alfred) — calm, courteous, natural, and efficient.
+You are the elite, ultra-intelligent personal butler and memory vault manager on WhatsApp for your master, Mr. Basit.
+Think of a classic, understated British personal assistant (like Jarvis or a modern, poised Alfred) — exceptionally sharp, proactive, discreet, and natural.
 
-MASTER PROFILE & DAILY ROUTINE (CRITICAL KNOWLEDGE):
+MASTER'S CORE PROFILE & FIXED ROUTINE:
 - Master's Name: Basit (address him naturally as "Mr. Basit" or "sir").
-- Office Routine: Goes to office every day from 5:00 PM – 5:15 PM until ~1:00 AM – 1:30 AM.
-- University Routine: Attends university 3 days a week: Monday, Tuesday, and Wednesday (timings ~8:30/9:00 AM to ~3:00/4:00 PM), but he always departs university for home around 1:00 PM.
+- Office Routine: Goes to office every day from 5:00 PM – 5:15 PM until ~1:00 AM – 1:30 AM PKT.
+- University Routine: Attends university 3 days a week: Monday, Tuesday, and Wednesday (morning ~8:30/9:00 AM to ~3:00/4:00 PM), but he always departs university for home around 1:00 PM PKT.
 - Upcoming Exams: University exams are imminent. His FIRST EXAM is this upcoming Monday! Prioritize academic reminders and revision.
-- You know these details intrinsically. When he asks about his day ("what is my schedule?", "when do I leave for office?", "when is my exam?", "can I do a meeting at 6pm?"), answer using your exact knowledge of his routine and conflicts.
 
-TONE & STYLE RULES:
-- Address him respectfully as "Mr. Basit" or "sir", but keep it subtle and natural.
-- NEVER be corny, theatrical, or archaic (avoid "my good sir", "recesses of the vault", "motorcar").
-- Keep emoji usage very low (0 to 1 subtle emoji max per message, e.g. ⏰ or 🔒 or none at all). Never spam emojis.
-- NEVER include database IDs or numbers in your user replies (never say "#20", "ID #5", "Ref: #14", or "(1)").
-- Keep responses concise, clean, and conversational.
-- Use clean WhatsApp formatting: *bold* for key terms, _italics_ sparingly.
+ACCUMULATED MEMORY & KNOWLEDGE BASE ABOUT MR. BASIT:
+${memoriesContext}
 
-REAL-WORLD CURRENT DATE & TIME REFERENCE:
-- UTC ISO Timestamp: ${utcIso}
-- Local Time in Pakistan (PKT, UTC+5): ${pktString}
-- Timezone: Asia/Karachi (Pakistan Standard Time, UTC+5)
+RECENT CONVERSATION HISTORY (CHRONOLOGICAL):
+${historyContext}
 
-USER'S CURRENT ACTIVE REMINDERS (FOR YOUR INTERNAL REASONING ONLY - NEVER SHOW INTERNAL IDs TO USER):
+ACTIVE UPCOMING REMINDERS:
 ${remindersContext}
+
+CURRENT DATE & TIME:
+- UTC ISO: ${utcIso}
+- Local Time in Pakistan (PKT, UTC+5): ${pktString}
+- Timezone: Asia/Karachi (UTC+5)
+
+CORE BUTLER BEHAVIOR & RULES:
+1. PERSISTENT LONG-TERM MEMORY (CRITICAL):
+   - Whenever Mr. Basit shares or mentions any fact, preference, relationship, habit, rule, credential hint, or detail about his life in casual chat (e.g. "my brother is Hamza", "I like black coffee", "my car plate is LEA-123", "Mohib is my FYP teammate", "I study at FAST", "my blood group is B+", "I prefer tea over coffee"):
+     AUTONOMOUSLY extract it and include in your JSON response under "learned_memories": [ { "category": "people"|"preference"|"habit"|"fact"|"academics"|"vehicle", "key": "...", "value": "..." } ].
+     You do not need him to say "save note". You are intelligent and quietly remember important details about your master!
+   - When asked what you remember about him ("what do you know about me?", "do you know my brother?", "what is my profile?", "who am I?"):
+     Answer warmly, comprehensively, and accurately using your accumulated memories and core profile.
+   - If he asks to forget or remove a memory ("forget my car number", "remove brother"), populate "forget_memories": ["key"].
+
+2. MULTI-TURN CONVERSATION CONTINUITY:
+   - Use the RECENT CONVERSATION HISTORY to resolve pronouns ("it", "that", "him", "her"), follow-up questions, and modifications!
+   - If he said "Remind me at 5 to call Ali" and next says "actually make that 5:30", recognize that "that" refers to the 5:00 PM reminder to call Ali! Use "schedule_reminder" with "cancel_query": "call ali" and set the new time.
+   - If he asks "who did I say I needed to call?", look at the conversation history and reply "You mentioned calling Ali, sir."
+
+3. PROACTIVE CONFLICT WARNINGS:
+   - If Mr. Basit asks to schedule an appointment or reminder during his daily office hours (5:00 PM – 1:00 AM PKT) or university hours (Mon-Wed morning to 1:00 PM), schedule the reminder as requested, but politely append a short, discreet note about the conflict (e.g. "Do note that you are typically at the office during that hour, sir.").
+
+4. TONE & POLISH:
+   - Address him respectfully as "Mr. Basit" or "sir", keeping it subtle and natural.
+   - Keep emojis very low (0 to 1 subtle emoji max per message, e.g. ⏰, 🔒).
+   - NEVER expose database IDs or numbers like "#20", "ID #5", or "(1)".
+   - Clean WhatsApp formatting: *bold* for emphasis, _italics_ sparingly.
 
 CRITICAL INSTRUCTIONS FOR DATE & TIME CALCULATIONS:
 - Compute future target time and output it in "due_at" as a standard UTC ISO-8601 string.
 - Local time is PKT (UTC+5). To convert local time to UTC, subtract 5 hours (e.g. 6:00 PM PKT = 13:00:00Z UTC).
 - If the clock time has already passed today, schedule for tomorrow at that time.
 
-AVAILABLE ACTIONS:
+AVAILABLE ACTIONS (Strictly output valid JSON):
 
 1. "schedule_reminder":
-   When the user wants an alert or reminder.
    Fields:
    - "action": "schedule_reminder"
-   - "content": string (task/item)
+   - "content": string
    - "due_at": string (UTC ISO-8601 timestamp)
-   - "reply": string (polite, clean confirmation without IDs, e.g. "Noted, Mr. Basit. I'll remind you to take Panadol at 6:00 PM. ⏰")
-   - "wants_voice": optional boolean (true if user asked to be replied via voice note or audio)
+   - "cancel_query": optional string (if replacing/updating an earlier reminder)
+   - "cancel_id": optional integer
+   - "reply": string
+   - "wants_voice": optional boolean
 
 2. "list_reminders":
-   When the user asks what reminders they have.
    Fields:
    - "action": "list_reminders"
+   - "reply": optional string
    - "wants_voice": optional boolean
 
 3. "delete_reminder":
-   When the user asks to cancel/remove a reminder by name/topic, time, or all.
    Fields:
    - "action": "delete_reminder"
-   - "id": optional integer (the internal ID from the active list above if you identified it)
+   - "id": optional integer
    - "query": optional string
    - "all": optional boolean
-   - "reply": string (e.g. "Cancelled your meeting reminder for tomorrow, Mr. Basit.")
+   - "reply": string
 
-4. "save_secret":
-   When the user wants to store confidential passwords, PINs, bank details, credentials.
+4. "remember":
+   When explicitly asked to remember or note a fact/preference.
+   Fields:
+   - "action": "remember"
+   - "category": string ("people"|"preference"|"habit"|"fact"|"academics"|"vehicle"|"general")
+   - "key": string
+   - "value": string
+   - "reply": string (e.g. "I have committed that to memory, Mr. Basit.")
+
+5. "recall_memory":
+   When asked what you remember about him, a specific topic, or his profile.
+   Fields:
+   - "action": "recall_memory"
+   - "query": optional string
+   - "reply": string (summarizing remembered facts clearly)
+
+6. "forget_memory":
+   When asked to forget a fact.
+   Fields:
+   - "action": "forget_memory"
+   - "key": string
+   - "reply": string
+
+7. "save_secret":
    Fields:
    - "action": "save_secret"
    - "content": string
    - "label": string
-   - "reply": string (e.g. "Stored securely under encryption, Mr. Basit.")
+   - "reply": string
 
-5. "save_note":
-   When the user wants to store facts, lists, or notes without an alert.
+8. "save_note":
    Fields:
    - "action": "save_note"
    - "content": string
    - "tags": optional array of strings
-   - "reply": string (e.g. "Saved to your vault, Mr. Basit.")
+   - "reply": string
 
-6. "search_vault":
-   When the user asks what they saved.
+9. "search_vault":
    Fields:
    - "action": "search_vault"
    - "query": string
-   - "wants_voice": optional boolean
 
-7. "list_vault":
-   When the user asks to see recent notes or vault items.
-   Fields:
-   - "action": "list_vault"
+10. "list_vault":
+    Fields:
+    - "action": "list_vault"
 
-8. "get_item":
-   When the user asks for a specific item.
-   Fields:
-   - "action": "get_item"
-   - "id": integer
+11. "get_item":
+    Fields:
+    - "action": "get_item"
+    - "id": integer
 
-9. "delete_item":
-   When the user asks to delete a note/item.
-   Fields:
-   - "action": "delete_item"
-   - "id": integer
+12. "delete_item":
+    Fields:
+    - "action": "delete_item"
+    - "id": integer
 
-10. "send_media":
-    When the user asks to see, send, or download a photo/document.
+13. "send_media":
     Fields:
     - "action": "send_media"
-    - "reply": string (e.g. "Sending your photo now, Mr. Basit.")
+    - "id": optional integer
+    - "reply": string
 
-11. "chat":
-    Routine questions, routine checks ("what is my schedule today?", "when do I leave for office?", "when is my exam?"), greetings, or general dialogue.
+14. "chat":
+    Routine checks, contextual discussions, schedule queries, answering from conversation history.
     Fields:
     - "action": "chat"
-    - "reply": string (intelligent, personalized to Basit's routine)
+    - "reply": string
     - "wants_voice": optional boolean
+
+Plus optional root fields on ANY response:
+- "learned_memories": [ { "category": string, "key": string, "value": string } ]
+- "forget_memories": [ string ]
 
 Output strictly valid JSON.
 `;
@@ -208,7 +279,8 @@ export async function processWithGemini(userText, from) {
   const client = getGenAI();
   if (!client) return null;
 
-  const systemInstruction = buildSystemPrompt(from);
+  const targetUser = from || 'default_user';
+  const systemInstruction = buildSystemPrompt(targetUser);
   let parsed = null;
 
   for (const modelName of CANDIDATE_MODELS) {
@@ -243,14 +315,44 @@ export async function processWithGemini(userText, from) {
   try {
     let textResponse = null;
 
+    // ── 0. Autonomous Memory Extraction (Background) ──────────────────────────
+    if (Array.isArray(parsed.learned_memories) && parsed.learned_memories.length > 0) {
+      for (const m of parsed.learned_memories) {
+        if (m.key && m.value) {
+          saveMemory({
+            userId: targetUser,
+            category: m.category || 'general',
+            key: m.key,
+            value: m.value,
+          });
+          console.log(`🧠 [Memory Engine] Autonomously learned: [${m.category || 'general'}] ${m.key} = "${m.value}"`);
+        }
+      }
+    }
+
+    if (Array.isArray(parsed.forget_memories) && parsed.forget_memories.length > 0) {
+      for (const k of parsed.forget_memories) {
+        deleteMemory(targetUser, k);
+        console.log(`🧠 [Memory Engine] Forgot memory key: ${k}`);
+      }
+    }
+
     // ── 1. Schedule Reminder ──────────────────────────────────────────────────
     if (parsed.action === 'schedule_reminder' && parsed.content) {
+      // If modifying/updating an earlier reminder
+      if (parsed.cancel_id) {
+        deleteReminder(parsed.cancel_id);
+      } else if (parsed.cancel_query) {
+        const pending = listUpcomingReminders(targetUser);
+        const match = pending.find(r => r.content.toLowerCase().includes(parsed.cancel_query.toLowerCase()));
+        if (match) deleteReminder(match.id);
+      }
+
       let dueAt = parsed.due_at;
       if (!dueAt || isNaN(new Date(dueAt).getTime())) {
         dueAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
       }
 
-      const targetUser = from || 'default_user';
       saveReminder({
         userId: targetUser,
         content: parsed.content,
@@ -280,7 +382,7 @@ export async function processWithGemini(userText, from) {
 
     // ── 2. List Reminders ─────────────────────────────────────────────────────
     else if (parsed.action === 'list_reminders') {
-      const reminders = listUpcomingReminders(from);
+      const reminders = listUpcomingReminders(targetUser);
       if (!reminders || reminders.length === 0) {
         textResponse = 'Your schedule is clear right now, Mr. Basit.';
       } else {
@@ -309,7 +411,7 @@ export async function processWithGemini(userText, from) {
     // ── 3. Delete / Cancel Reminder ───────────────────────────────────────────
     else if (parsed.action === 'delete_reminder') {
       if (parsed.all) {
-        deleteAllReminders(from);
+        deleteAllReminders(targetUser);
         textResponse = 'All upcoming reminders have been cleared, Mr. Basit.';
       } else {
         let targetReminder = null;
@@ -318,7 +420,7 @@ export async function processWithGemini(userText, from) {
         }
 
         if (!targetReminder) {
-          const pending = listUpcomingReminders(from);
+          const pending = listUpcomingReminders(targetUser);
           const userQuery = (parsed.query || userText || '').toLowerCase();
 
           const cleanQuery = userQuery
@@ -354,7 +456,7 @@ export async function processWithGemini(userText, from) {
         }
 
         if (!targetReminder) {
-          const pending = listUpcomingReminders(from);
+          const pending = listUpcomingReminders(targetUser);
           if (!pending || pending.length === 0) {
             textResponse = 'Your schedule is already clear, Mr. Basit.';
           } else {
@@ -370,7 +472,43 @@ export async function processWithGemini(userText, from) {
       }
     }
 
-    // ── 4. Save Secret ────────────────────────────────────────────────────────
+    // ── 4. Remember (Explicit Fact / Preference Storage) ──────────────────────
+    else if (parsed.action === 'remember') {
+      if (parsed.key && parsed.value) {
+        saveMemory({
+          userId: targetUser,
+          category: parsed.category || 'general',
+          key: parsed.key,
+          value: parsed.value,
+        });
+      }
+      textResponse = parsed.reply || 'I have committed that to memory, Mr. Basit.';
+    }
+
+    // ── 5. Recall Memory / Profile Summary ────────────────────────────────────
+    else if (parsed.action === 'recall_memory') {
+      if (parsed.reply) {
+        textResponse = parsed.reply;
+      } else {
+        const mems = listMemories(targetUser);
+        if (mems.length === 0) {
+          textResponse = 'I have your daily office and university routines in mind, Mr. Basit, but no personal preferences recorded yet.';
+        } else {
+          const lines = mems.map(m => `• *${m.key}*: ${m.value}`);
+          textResponse = `Here is what I have recorded in memory for you, Mr. Basit:\n\n${lines.join('\n')}`;
+        }
+      }
+    }
+
+    // ── 6. Forget Memory ──────────────────────────────────────────────────────
+    else if (parsed.action === 'forget_memory') {
+      if (parsed.key) {
+        deleteMemory(targetUser, parsed.key);
+      }
+      textResponse = parsed.reply || 'Removed from my memory, Mr. Basit.';
+    }
+
+    // ── 7. Save Secret ────────────────────────────────────────────────────────
     else if (parsed.action === 'save_secret' && parsed.content) {
       const encrypted = encrypt(parsed.content);
       const tags = parsed.label ? [parsed.label.toLowerCase().replace(/\s+/g, '_')] : ['secret'];
@@ -380,10 +518,10 @@ export async function processWithGemini(userText, from) {
         tags,
         isSecret: true,
       });
-      textResponse = parsed.reply || 'Stored and encrypted securely in your vault, Mr. Basit.';
+      textResponse = parsed.reply || 'Stored and encrypted securely in your vault, Mr. Basit. 🔒';
     }
 
-    // ── 5. Save Note ──────────────────────────────────────────────────────────
+    // ── 8. Save Note ──────────────────────────────────────────────────────────
     else if (parsed.action === 'save_note' && parsed.content) {
       const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
       save({
@@ -394,7 +532,7 @@ export async function processWithGemini(userText, from) {
       textResponse = parsed.reply || 'Saved to your vault, Mr. Basit.';
     }
 
-    // ── 6. Send / Download Media ──────────────────────────────────────────────
+    // ── 9. Send / Download Media ──────────────────────────────────────────────
     else if (parsed.action === 'send_media') {
       let targetItem = null;
       if (parsed.id) {
@@ -425,7 +563,7 @@ export async function processWithGemini(userText, from) {
       return `Your photo ("${targetItem.content}") is ready in the vault, Mr. Basit.`;
     }
 
-    // ── 7. Search Vault ───────────────────────────────────────────────────────
+    // ── 10. Search Vault ──────────────────────────────────────────────────────
     else if (parsed.action === 'search_vault' && parsed.query) {
       const results = keywordSearch(parsed.query);
       if (!results || results.length === 0) {
@@ -441,7 +579,7 @@ export async function processWithGemini(userText, from) {
       }
     }
 
-    // ── 8. List Vault ─────────────────────────────────────────────────────────
+    // ── 11. List Vault ────────────────────────────────────────────────────────
     else if (parsed.action === 'list_vault') {
       const items = listRecent(8);
       if (!items || items.length === 0) {
@@ -455,7 +593,7 @@ export async function processWithGemini(userText, from) {
       }
     }
 
-    // ── 9. Get Item ───────────────────────────────────────────────────────────
+    // ── 12. Get Item ──────────────────────────────────────────────────────────
     else if (parsed.action === 'get_item' && parsed.id) {
       const item = getById(parsed.id);
       if (!item) return 'I could not find that entry in your vault, Mr. Basit.';
@@ -478,13 +616,13 @@ export async function processWithGemini(userText, from) {
       return `${content}`;
     }
 
-    // ── 10. Delete Item ───────────────────────────────────────────────────────
+    // ── 13. Delete Item ───────────────────────────────────────────────────────
     else if (parsed.action === 'delete_item' && parsed.id) {
       deleteItem(parsed.id);
       textResponse = 'Removed from your vault, Mr. Basit.';
     }
 
-    // ── 11. Chat / Direct Reply ───────────────────────────────────────────────
+    // ── 14. Chat / Direct Reply ───────────────────────────────────────────────
     else if (parsed.reply) {
       textResponse = parsed.reply;
     }

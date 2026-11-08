@@ -32,8 +32,12 @@ class JsonDatabaseFallback {
     this.filePath = filePath;
     this.items = [];
     this.reminders = [];
+    this.memories = [];
+    this.conversations = [];
     this.nextId = 1;
     this.nextReminderId = 1;
+    this.nextMemoryId = 1;
+    this.nextConvId = 1;
     this.load();
   }
 
@@ -45,17 +49,27 @@ class JsonDatabaseFallback {
         if (Array.isArray(parsed)) {
           this.items = parsed;
           this.reminders = [];
+          this.memories = [];
+          this.conversations = [];
         } else {
           this.items = parsed.items || [];
           this.reminders = parsed.reminders || [];
+          this.memories = parsed.memories || [];
+          this.conversations = parsed.conversations || [];
         }
         const maxId = this.items.reduce((max, i) => Math.max(max, i.id || 0), 0);
         this.nextId = maxId + 1;
         const maxRemId = this.reminders.reduce((max, r) => Math.max(max, r.id || 0), 0);
         this.nextReminderId = maxRemId + 1;
+        const maxMemId = this.memories.reduce((max, m) => Math.max(max, m.id || 0), 0);
+        this.nextMemoryId = maxMemId + 1;
+        const maxConvId = this.conversations.reduce((max, c) => Math.max(max, c.id || 0), 0);
+        this.nextConvId = maxConvId + 1;
       } catch (e) {
         this.items = [];
         this.reminders = [];
+        this.memories = [];
+        this.conversations = [];
       }
     }
   }
@@ -64,7 +78,12 @@ class JsonDatabaseFallback {
     try {
       fs.writeFileSync(
         this.filePath,
-        JSON.stringify({ items: this.items, reminders: this.reminders }, null, 2),
+        JSON.stringify({
+          items: this.items,
+          reminders: this.reminders,
+          memories: this.memories,
+          conversations: this.conversations,
+        }, null, 2),
         'utf8'
       );
       scheduleCloudBackup(this.filePath);
@@ -173,6 +192,160 @@ class JsonDatabaseFallback {
     if (s.includes('count(*) as count from reminders')) {
       return {
         get: () => ({ count: self.reminders.filter(r => !r.sent_at).length }),
+      };
+    }
+
+
+    // ── MEMORIES TABLE QUERIES ──────────────────────────────────────────────
+    if (s.includes('from memories where user_id = ? and key = ?')) {
+      return {
+        get: (userId, key) => {
+          const k = String(key || '').trim().toLowerCase();
+          return self.memories.find(m => m.user_id === userId && m.key.toLowerCase() === k) || null;
+        },
+      };
+    }
+
+    if (s.startsWith('update memories set value = ?, category = ?, updated_at = ? where id = ?')) {
+      return {
+        run: (value, category, updatedAt, id) => {
+          const mem = self.memories.find(m => Number(m.id) === Number(id));
+          if (mem) {
+            mem.value = value;
+            mem.category = category;
+            mem.updated_at = updatedAt;
+            self.save();
+            return { changes: 1 };
+          }
+          return { changes: 0 };
+        },
+      };
+    }
+
+    if (s.startsWith('insert into memories')) {
+      return {
+        run: (userId, category, key, value) => {
+          const mem = {
+            id: self.nextMemoryId++,
+            user_id: userId || 'default_user',
+            category: category || 'general',
+            key: String(key || '').trim().toLowerCase(),
+            value: String(value || '').trim(),
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          self.memories.push(mem);
+          self.save();
+          return { lastInsertRowid: mem.id };
+        },
+      };
+    }
+
+    if (s.includes('from memories where user_id = ?')) {
+      return {
+        all: (userId) => {
+          return self.memories
+            .filter(m => m.user_id === userId)
+            .sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.key.localeCompare(b.key));
+        },
+      };
+    }
+
+    if (s.includes('from memories order by')) {
+      return {
+        all: () => {
+          return self.memories
+            .slice()
+            .sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.key.localeCompare(b.key));
+        },
+      };
+    }
+
+    if (s.startsWith('delete from memories where user_id = ? and key = ?')) {
+      return {
+        run: (userId, key) => {
+          const k = String(key || '').trim().toLowerCase();
+          const before = self.memories.length;
+          self.memories = self.memories.filter(m => !(m.user_id === userId && m.key.toLowerCase() === k));
+          self.save();
+          return { changes: before - self.memories.length };
+        },
+      };
+    }
+
+    if (s.startsWith('delete from memories where user_id = ?')) {
+      return {
+        run: (userId) => {
+          const before = self.memories.length;
+          self.memories = self.memories.filter(m => m.user_id !== userId);
+          self.save();
+          return { changes: before - self.memories.length };
+        },
+      };
+    }
+
+    // ── CONVERSATION HISTORY QUERIES ────────────────────────────────────────
+    if (s.startsWith('insert into conversation_history')) {
+      return {
+        run: (userId, role, contentText) => {
+          const entry = {
+            id: self.nextConvId++,
+            user_id: userId || 'default_user',
+            role,
+            content: String(contentText || ''),
+            created_at: new Date().toISOString(),
+          };
+          self.conversations.push(entry);
+          self.save();
+          return { lastInsertRowid: entry.id };
+        },
+      };
+    }
+
+    if (s.includes('from conversation_history where user_id = ? order by') && s.includes('limit ?')) {
+      return {
+        all: (userId, limit = 10) => {
+          return self.conversations
+            .filter(c => c.user_id === userId)
+            .slice()
+            .reverse()
+            .slice(0, Number(limit))
+            .map(c => ({ role: c.role, content: c.content, created_at: c.created_at }));
+        },
+      };
+    }
+
+    if (s.includes('from conversation_history where user_id = ? order by created_at desc')) {
+      return {
+        all: (userId) => {
+          return self.conversations
+            .filter(c => c.user_id === userId)
+            .slice()
+            .reverse()
+            .map(c => ({ id: c.id, role: c.role, content: c.content, created_at: c.created_at }));
+        },
+      };
+    }
+
+    if (s.startsWith('delete from conversation_history where user_id = ? and id < ?')) {
+      return {
+        run: (userId, oldestId) => {
+          const before = self.conversations.length;
+          self.conversations = self.conversations.filter(c => !(c.user_id === userId && c.id < oldestId));
+          self.save();
+          return { changes: before - self.conversations.length };
+        },
+      };
+    }
+
+    if (s.startsWith('delete from conversation_history where user_id = ?')) {
+      return {
+        run: (userId) => {
+          const before = self.conversations.length;
+          self.conversations = self.conversations.filter(c => c.user_id !== userId);
+          self.save();
+          return { changes: before - self.conversations.length };
+        },
       };
     }
 
@@ -319,9 +492,13 @@ export function syncSqliteToJson() {
   try {
     const items = db.prepare('SELECT * FROM items').all();
     const reminders = db.prepare('SELECT * FROM reminders').all();
+    let memories = [];
+    let conversations = [];
+    try { memories = db.prepare('SELECT * FROM memories').all(); } catch (e) {}
+    try { conversations = db.prepare('SELECT * FROM conversation_history').all(); } catch (e) {}
     fs.writeFileSync(
       JSON_PATH,
-      JSON.stringify({ items, reminders }, null, 2),
+      JSON.stringify({ items, reminders, memories, conversations }, null, 2),
       'utf8'
     );
     scheduleCloudBackup(JSON_PATH);
@@ -431,6 +608,27 @@ export function initDB() {
           sent_at     TEXT DEFAULT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_at, sent_at);
+
+        CREATE TABLE IF NOT EXISTS memories (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id     TEXT NOT NULL,
+          category    TEXT DEFAULT 'general',
+          key         TEXT NOT NULL,
+          value       TEXT NOT NULL,
+          created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_user_key ON memories(user_id, key);
+
+        CREATE TABLE IF NOT EXISTS conversation_history (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id     TEXT NOT NULL,
+          role        TEXT NOT NULL,
+          content     TEXT NOT NULL,
+          created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_conv_user ON conversation_history(user_id, created_at DESC);
+
       `);
 
       try {

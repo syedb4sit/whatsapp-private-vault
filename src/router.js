@@ -10,6 +10,7 @@ import {
   deleteReminder,
   deleteAllReminders,
   getReminderById,
+  recordConversation,
 } from './vault/store.js';
 import { semanticSearch, getEmbedding, keywordSearch } from './vault/search.js';
 import { encrypt, decrypt } from './vault/crypto.js';
@@ -28,6 +29,10 @@ export async function dispatch(from, message) {
   const { type: msgType, text, mediaId, mimeType, caption } = message;
   const trimmed = (text || '').trim();
 
+  if (trimmed && msgType === 'text') {
+    recordConversation(from, 'user', trimmed);
+  }
+
   // ── 1. Voice Note / Audio Processing ─────────────────────────────────────
   if (msgType === 'audio' && (message.filePath || mediaId)) {
     let audioPath = message.filePath;
@@ -42,6 +47,7 @@ export async function dispatch(from, message) {
 
       if (transcription) {
         console.log(`🎙️ [Router] Voice Note Transcribed: "${transcription}"`);
+        recordConversation(from, 'user', transcription);
 
         // Save voice note with transcription to vault for searchability
         save({

@@ -1,7 +1,7 @@
 import express from 'express';
 import { config } from './config.js';
 import { initDB, initCloudSync } from './vault/db.js';
-import { getCount, listRecent, getReminderCount, listUpcomingReminders } from './vault/store.js';
+import { getCount, listRecent, getReminderCount, listUpcomingReminders, listMemories, getMemoryCount } from './vault/store.js';
 import { handleInbound } from './whatsapp/handler.js';
 import { dispatch } from './router.js';
 import { startAgentPoller } from './whatsapp/agentPoller.js';
@@ -19,13 +19,17 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/', (req, res) => {
   let count = 0;
   let reminderCount = 0;
+  let memoryCount = 0;
   let items = [];
   let pendingReminders = [];
+  let memories = [];
   try {
     count = getCount();
     reminderCount = getReminderCount();
+    memoryCount = getMemoryCount();
     items = listRecent(5);
     pendingReminders = listUpcomingReminders();
+    memories = listMemories();
   } catch (e) {}
 
   const hasToken = Boolean(config.whatsappToken && !config.whatsappToken.includes('your_token'));
@@ -46,7 +50,7 @@ app.get('/', (req, res) => {
     .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.85rem; font-weight: 600; background: #059669; color: white; }
     .badge-warn { background: #d97706; }
     .badge-err { background: #dc2626; }
-    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
     .stat { font-size: 2.2rem; font-weight: bold; color: #38bdf8; margin: 0.5rem 0; }
     input, button { padding: 0.75rem; border-radius: 8px; border: 1px solid #475569; font-size: 1rem; }
     input { background: #0f172a; color: white; width: 70%; }
@@ -74,7 +78,11 @@ app.get('/', (req, res) => {
       </div>
       <div>
         <div class="stat" style="color: #fbbf24;">${reminderCount}</div>
-        <div style="color: #94a3b8;">Active Scheduled Reminders</div>
+        <div style="color: #94a3b8;">Active Reminders</div>
+      </div>
+      <div>
+        <div class="stat" style="color: #a855f7;">${memoryCount}</div>
+        <div style="color: #94a3b8;">Learned Facts in Memory</div>
       </div>
     </div>
   </div>
@@ -123,6 +131,14 @@ app.get('/', (req, res) => {
       <strong>Agent Response:</strong>
       <pre id="simOutput"></pre>
     </div>
+  </div>
+
+
+  <div class="card">
+    <h3>🧠 Butler Long-Term Knowledge Base</h3>
+    <ul>
+      ${memories.length === 0 ? '<li style="color:#64748b;">No personal memories learned yet. Chat naturally to teach the Butler facts, preferences, or relationships!</li>' : memories.map(m => `<li><span style="color:#c084fc;">[${(m.category || 'general').toUpperCase()}]</span> <strong>${m.key}</strong>: ${m.value}</li>`).join('')}
+    </ul>
   </div>
 
   <div class="card">
@@ -228,6 +244,8 @@ app.get('/api/status', (req, res) => {
     webhook: webhookStatus,
     items: getCount(),
     reminders: getReminderCount(),
+    memoryCount: getMemoryCount(),
+    memories: listMemories(),
     recentLogs: getRecentLogs(50),
   });
 });
